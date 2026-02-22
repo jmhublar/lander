@@ -297,103 +297,115 @@ let deathMarchOscillators = [];
 let deathMarchGainNode = null;
 
 function playDeathMarchTheme() {
-  if (!audioCtx || deathMarchPlaying) return;
+  if (!audioCtx) return;
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+  if (deathMarchPlaying) return;
   stopMarchTheme();
   deathMarchPlaying = true;
 
   deathMarchGainNode = audioCtx.createGain();
-  deathMarchGainNode.gain.value = 0.22;
+  deathMarchGainNode.gain.value = 0.45;
   deathMarchGainNode.connect(audioCtx.destination);
 
-  // Funeral march feel in D minor with clockwork-like ticks.
-  const BPM = 70;
-  const Q = 60000 / BPM;
-  const E = Q / 2;
-  const H = Q * 2;
-
-  const A2 = 110.0;
-  const C3 = 130.81;
-  const D3 = 146.83;
-  const E3 = 164.81;
-  const F3 = 174.61;
-  const G3 = 196.0;
-  const A3 = 220.0;
-  const C4 = 261.63;
-  const D4 = 293.66;
-  const E4 = 329.63;
-  const F4 = 349.23;
-  const G4 = 392.0;
-  const A4 = 440.0;
-
-  const melody = [
-    [D4, Q, 0], [F4, Q, Q], [A4, H, Q * 2],
-    [G4, Q, Q * 4], [F4, Q, Q * 5], [E4, H, Q * 6],
-    [D4, Q, Q * 8], [F4, Q, Q * 9], [A4, Q, Q * 10], [C4, Q, Q * 11],
-    [A3, Q, Q * 12], [G3, Q, Q * 13], [F3, H, Q * 14],
+  // Notes transcribed from the provided MIDI:
+  // https://bitmidi.com/purcell-funeral-music-for-queen-mary-mid
+  // Format per note: [startTick, durationTick, midiNote]
+  const soprano = [
+    [0, 984, 67], [1024, 492, 68], [1536, 492, 68], [2048, 1400, 67],
+    [4096, 984, 67], [5120, 492, 72], [5632, 492, 72], [6144, 1350, 71],
+    [8192, 984, 74], [9216, 492, 72], [9728, 492, 69], [10240, 1380, 70],
+    [12288, 984, 70], [13312, 492, 68], [13824, 492, 65], [14336, 1390, 67],
+    [16384, 984, 72], [17408, 492, 72], [17920, 492, 71], [18432, 1450, 72],
   ];
 
-  const bassLine = [
-    [D3, H, 0], [A2, H, Q * 2], [D3, H, Q * 4], [C3, H, Q * 6],
-    [D3, H, Q * 8], [A2, H, Q * 10], [F3, H, Q * 12], [D3, H, Q * 14],
+  const alto = [
+    [0, 984, 64], [1024, 492, 65], [1536, 492, 65], [2048, 1400, 64],
+    [4096, 984, 63], [5120, 492, 63], [5632, 492, 65], [6144, 1350, 67],
+    [8192, 984, 70], [9216, 492, 69], [9728, 492, 66], [10240, 1380, 67],
+    [12288, 984, 67], [13312, 492, 65], [13824, 492, 62], [14336, 1390, 63],
+    [16384, 984, 67], [17408, 492, 68], [17920, 492, 67], [18432, 1450, 64],
   ];
 
-  const clockTicks = [];
-  for (let i = 0; i < 32; i++) {
-    clockTicks.push(i * E);
+  const tenor = [
+    [0, 984, 60], [1024, 492, 60], [1536, 492, 60], [2048, 1400, 60],
+    [4096, 984, 60], [5120, 492, 60], [5632, 492, 60], [6144, 1350, 62],
+    [8192, 984, 67], [9216, 492, 63], [9728, 492, 62], [10240, 1380, 62],
+    [12288, 984, 63], [13312, 492, 60], [13824, 492, 58], [14336, 1390, 58],
+    [16384, 984, 63], [17408, 492, 62], [17920, 492, 62], [18432, 1450, 60],
+  ];
+
+  const bass = [
+    [0, 984, 48], [1024, 492, 53], [1536, 492, 53], [2048, 1400, 48],
+    [4096, 984, 48], [5120, 492, 56], [5632, 492, 56], [6144, 1350, 55],
+    [8192, 984, 55], [9216, 492, 60], [9728, 492, 62], [10240, 1380, 55],
+    [12288, 984, 51], [13312, 492, 56], [13824, 492, 58], [14336, 1390, 51],
+    [16384, 984, 48], [17408, 492, 53], [17920, 492, 55], [18432, 1450, 48],
+  ];
+
+  const TICKS_PER_BEAT = 256;
+  const BPM = 120;
+  const MS_PER_TICK = 60000 / (BPM * TICKS_PER_BEAT);
+  const LOOP_TICKS = 20480;
+  const loopDuration = LOOP_TICKS * MS_PER_TICK;
+
+  const voices = [
+    { notes: soprano, wave: 'square', gain: 0.17 },
+    { notes: alto, wave: 'square', gain: 0.13 },
+    { notes: tenor, wave: 'sawtooth', gain: 0.11 },
+    { notes: bass, wave: 'triangle', gain: 0.2 },
+  ];
+
+  function midiNoteToFreq(note) {
+    return 440 * Math.pow(2, (note - 69) / 12);
   }
-
-  const loopDuration = Q * 16;
 
   function scheduleLoop() {
     if (!deathMarchPlaying) return;
     const now = audioCtx.currentTime;
 
-    melody.forEach(([freq, dur, start]) => {
-      const osc = audioCtx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.value = freq;
-      const g = audioCtx.createGain();
-      g.gain.setValueAtTime(0, now + start / 1000);
-      g.gain.linearRampToValueAtTime(0.1, now + start / 1000 + 0.02);
-      g.gain.setValueAtTime(0.1, now + (start + dur * 0.8) / 1000);
-      g.gain.linearRampToValueAtTime(0, now + (start + dur) / 1000);
-      osc.connect(g);
-      g.connect(deathMarchGainNode);
-      osc.start(now + start / 1000);
-      osc.stop(now + (start + dur + 20) / 1000);
-      deathMarchOscillators.push(osc);
+    voices.forEach(voice => {
+      voice.notes.forEach(([startTick, durTick, midiNote]) => {
+        const start = now + (startTick * MS_PER_TICK) / 1000;
+        const end = now + ((startTick + durTick) * MS_PER_TICK) / 1000;
+
+        const osc = audioCtx.createOscillator();
+        osc.type = voice.wave;
+        osc.frequency.value = midiNoteToFreq(midiNote);
+
+        const g = audioCtx.createGain();
+        g.gain.setValueAtTime(0, start);
+        g.gain.linearRampToValueAtTime(voice.gain, start + 0.02);
+        g.gain.setValueAtTime(voice.gain, start + ((durTick * MS_PER_TICK * 0.8) / 1000));
+        g.gain.linearRampToValueAtTime(0, end);
+
+        osc.connect(g);
+        g.connect(deathMarchGainNode);
+        osc.start(start);
+        osc.stop(end + 0.05);
+        deathMarchOscillators.push(osc);
+      });
     });
 
-    bassLine.forEach(([freq, dur, start]) => {
-      const osc = audioCtx.createOscillator();
-      osc.type = 'triangle';
-      osc.frequency.value = freq;
-      const g = audioCtx.createGain();
-      g.gain.setValueAtTime(0, now + start / 1000);
-      g.gain.linearRampToValueAtTime(0.16, now + start / 1000 + 0.02);
-      g.gain.setValueAtTime(0.16, now + (start + dur * 0.75) / 1000);
-      g.gain.linearRampToValueAtTime(0, now + (start + dur) / 1000);
-      osc.connect(g);
-      g.connect(deathMarchGainNode);
-      osc.start(now + start / 1000);
-      osc.stop(now + (start + dur + 20) / 1000);
-      deathMarchOscillators.push(osc);
-    });
-
-    clockTicks.forEach((start, i) => {
+    // Subtle clockwork-style ticks to keep the Kubrick flavor.
+    const ticksPerClick = 512;
+    for (let i = 0; i < LOOP_TICKS / ticksPerClick; i++) {
+      const startTick = i * ticksPerClick;
+      const start = now + (startTick * MS_PER_TICK) / 1000;
       const osc = audioCtx.createOscillator();
       osc.type = 'square';
-      osc.frequency.value = i % 2 === 0 ? 1650 : 1200;
+      osc.frequency.value = i % 2 === 0 ? 1500 : 1050;
       const g = audioCtx.createGain();
-      g.gain.setValueAtTime(0, now + start / 1000);
-      g.gain.linearRampToValueAtTime(0.03, now + start / 1000 + 0.004);
-      g.gain.linearRampToValueAtTime(0, now + start / 1000 + 0.035);
+      g.gain.setValueAtTime(0, start);
+      g.gain.linearRampToValueAtTime(0.03, start + 0.004);
+      g.gain.linearRampToValueAtTime(0, start + 0.035);
       osc.connect(g);
       g.connect(deathMarchGainNode);
-      osc.start(now + start / 1000);
-      osc.stop(now + start / 1000 + 0.05);
+      osc.start(start);
+      osc.stop(start + 0.05);
       deathMarchOscillators.push(osc);
-    });
+    }
 
     deathMarchTimeout = setTimeout(scheduleLoop, loopDuration - 50);
   }
@@ -702,6 +714,7 @@ function spawnLandingParticles(x, y) {
 
 // ─── Init Level ──────────────────────────────────────────────────────
 function startLevel(lvl) {
+  stopDeathMarchTheme();
   level = lvl;
   state = 'playing';
   const t = generateTerrain(lvl);
@@ -792,6 +805,9 @@ function checkLanding() {
 // ─── Update ──────────────────────────────────────────────────────────
 function update() {
   if (state !== 'playing') {
+    if (state === 'gameOver' && !deathMarchPlaying) {
+      playDeathMarchTheme();
+    }
     // Update particles even when not playing
     updateParticles();
     updateThrustSound(false);
