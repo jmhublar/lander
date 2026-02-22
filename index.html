@@ -351,17 +351,46 @@ const MAX_SAFE_VX = 0.6;
 const MAX_SAFE_ANGLE = 0.35; // ~20 degrees
 const LANDER_SIZE = 14;
 const BOUNDARY_MARGIN = 0.15; // boundary at 15% beyond screen edges
+const STARTING_LIVES = 3;
+const HIGH_SCORE_STORAGE_KEY = 'moonlander.highScore';
 
 // ─── Game State ──────────────────────────────────────────────────────
 let state = 'title'; // title, playing, landed, crashed, gameOver
 let level = 1;
 let score = 0;
-let lives = 3;
+let lives = STARTING_LIVES;
 let lander, terrain, landingPads, stars;
 let particles = [];
 let keys = {};
 let messageTimer = 0;
 let camera = { x: 0, y: 0, zoom: 1, targetZoom: 1 };
+let highScore = loadHighScore();
+
+function loadHighScore() {
+  try {
+    const savedValue = window.localStorage.getItem(HIGH_SCORE_STORAGE_KEY);
+    if (savedValue === null) return 0;
+    const parsedValue = Number.parseInt(savedValue, 10);
+    if (!Number.isFinite(parsedValue) || parsedValue < 0) return 0;
+    return parsedValue;
+  } catch {
+    return 0;
+  }
+}
+
+function saveHighScore(value) {
+  try {
+    window.localStorage.setItem(HIGH_SCORE_STORAGE_KEY, String(value));
+  } catch {
+  }
+}
+
+function syncHighScore() {
+  if (score > highScore) {
+    highScore = score;
+    saveHighScore(highScore);
+  }
+}
 
 // ─── Input ───────────────────────────────────────────────────────────
 window.addEventListener('keydown', e => {
@@ -374,7 +403,7 @@ window.addEventListener('keydown', e => {
   if (state === 'title' && e.code === 'Space') {
     stopMarchTheme();
     playStartJingle();
-    lives = 3;
+    lives = STARTING_LIVES;
     score = 0;
     startLevel(1);
   }
@@ -388,7 +417,7 @@ window.addEventListener('keydown', e => {
   if (state === 'gameOver' && e.code === 'Space') {
     // Return to title
     state = 'title';
-    lives = 3;
+    lives = STARTING_LIVES;
     score = 0;
     level = 1;
     stars = generateStars();
@@ -602,12 +631,13 @@ function checkLanding() {
       const aBonus = Math.floor((1 - Math.abs(lander.angle) / MAX_SAFE_ANGLE) * 50);
       const levelBonus = level * 100;
       score += levelBonus + vBonus + aBonus;
+      syncHighScore();
       spawnLandingParticles(lander.x, pad.y);
       updateThrustSound(false);
       playLandingSound();
     } else {
-      lives--;
-      if (lives <= 0) {
+      lives = Math.max(0, lives - 1);
+      if (lives === 0) {
         state = 'gameOver';
       } else {
         state = 'crashed';
@@ -825,11 +855,12 @@ function drawTitle() {
   ctx.fillStyle = '#888';
   ctx.fillText('Arrow keys or WASD to fly', cx, cy + 20);
   ctx.fillText('Land gently on the pads', cx, cy + 45);
+  ctx.fillText(`High score: ${highScore}`, cx, cy + 70);
 
   ctx.fillStyle = '#44ff88';
   ctx.font = '20px monospace';
   const blink = Math.sin(Date.now() / 400) > 0;
-  if (blink) ctx.fillText('PRESS SPACE TO START', cx, cy + 100);
+  if (blink) ctx.fillText('PRESS SPACE TO START', cx, cy + 120);
 }
 
 function drawBoundary() {
@@ -1027,13 +1058,14 @@ function drawHUD() {
   ctx.fillStyle = '#888';
   ctx.fillText(`LEVEL ${level}`, margin, margin + 14);
   ctx.fillText(`SCORE ${score}`, margin, margin + 32);
+  ctx.fillText(`HI ${highScore}`, margin, margin + 50);
 
   // Lives display as lander icons
   ctx.fillStyle = '#fff';
-  ctx.fillText('LIVES', margin, margin + 50);
+  ctx.fillText('LIVES', margin, margin + 68);
   for (let i = 0; i < lives; i++) {
     const lx = margin + 60 + i * 20;
-    const ly = margin + 45;
+    const ly = margin + 63;
     ctx.save();
     ctx.translate(lx, ly);
     ctx.fillStyle = '#ddd';
@@ -1076,13 +1108,19 @@ function drawGameOver() {
   ctx.fillStyle = '#888';
   ctx.font = '18px monospace';
   ctx.fillText(`Final Score: ${score}`, cx, cy + 10);
-  ctx.fillText(`Reached Level ${level}`, cx, cy + 38);
+  ctx.fillText(`High Score: ${highScore}`, cx, cy + 38);
+  ctx.fillText(`Reached Level ${level}`, cx, cy + 66);
+
+  if (score === highScore && score > 0) {
+    ctx.fillStyle = '#44ff88';
+    ctx.fillText('NEW HIGH SCORE!', cx, cy + 94);
+  }
 
   const blink = Math.sin(Date.now() / 400) > 0;
   if (blink) {
     ctx.fillStyle = '#ccc';
     ctx.font = '20px monospace';
-    ctx.fillText('PRESS SPACE', cx, cy + 90);
+    ctx.fillText('PRESS SPACE', cx, cy + 130);
   }
 }
 
