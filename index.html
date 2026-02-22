@@ -12,6 +12,7 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+<button id="tiltBtn" style="display:none;position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#4488ff;color:#fff;border:none;border-radius:8px;padding:14px 28px;font-size:18px;font-family:monospace;z-index:10;cursor:pointer;">📱 ENABLE TILT</button>
 <script>
 // ─── Setup ───────────────────────────────────────────────────────────
 const canvas = document.getElementById('c');
@@ -587,46 +588,59 @@ let hasTouched = false;
 let touchThrusting = false;        // screen press = thrust
 let tiltAvailable = false;         // whether DeviceOrientation fired
 let tiltRaw = 0;                   // raw delta-gamma from sensor (relative to calibrated neutral)
-let tiltBaseline = null;           // gamma at the moment the player first tilts
-
-// Request permission on iOS 13+ then start listening (called once)
+let tiltBaseline = null;           // gamma at the moment of first reading
 let tiltListenerStarted = false;
-function requestTiltPermission() {
-  if (typeof DeviceOrientationEvent !== 'undefined' &&
-      typeof DeviceOrientationEvent.requestPermission === 'function') {
-    DeviceOrientationEvent.requestPermission()
-      .then(r => { if (r === 'granted') startTiltListener(); })
-      .catch(() => {});
-  } else {
-    startTiltListener();
-  }
-}
+let iosTiltPermissionNeeded = (typeof DeviceOrientationEvent !== 'undefined' &&
+  typeof DeviceOrientationEvent.requestPermission === 'function');
+let showTiltButton = iosTiltPermissionNeeded; // show button on iOS until granted
 
 function startTiltListener() {
-  if (tiltListenerStarted) return; // only register once
+  if (tiltListenerStarted) return;
   tiltListenerStarted = true;
   window.addEventListener('deviceorientation', e => {
-    // gamma = left/right tilt of the phone: -90 (left) to +90 (right)
     if (e.gamma === null) return;
     tiltAvailable = true;
-    // Calibrate on first reading so any hold angle is "neutral"
+    showTiltButton = false; // hide button once events flow
     if (tiltBaseline === null) tiltBaseline = e.gamma;
-    // Delta from neutral, clamped to ±45°
     tiltRaw = Math.max(-45, Math.min(45, e.gamma - tiltBaseline));
+    if (tiltAvailable) tiltBtn.style.display = 'none';
   }, { passive: true });
 }
 
-// Recalibrate tilt baseline (resets neutral angle to current phone position)
-function recalibrateTilt() {
-  tiltBaseline = null; // next orientation event will set a new baseline
+function requestIOSTiltPermission() {
+  // Must be called synchronously from a direct user gesture (button tap)
+  DeviceOrientationEvent.requestPermission()
+    .then(r => {
+      if (r === 'granted') {
+        startTiltListener();
+        showTiltButton = false;
+      }
+    })
+    .catch(() => { showTiltButton = false; });
 }
+
+function recalibrateTilt() {
+  tiltBaseline = null;
+}
+
+// Start listening immediately for non-iOS devices
+if (!iosTiltPermissionNeeded) {
+  startTiltListener();
+}
+
+// ─── Tilt Button (iOS permission) ────────────────────────────────────
+const tiltBtn = document.getElementById('tiltBtn');
+if (iosTiltPermissionNeeded) tiltBtn.style.display = 'block';
+tiltBtn.addEventListener('click', () => {
+  requestIOSTiltPermission();
+  tiltBtn.style.display = 'none';
+});
 
 // Touchstart: thrust on, handle title/crash taps, init audio
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
   hasTouched = true;
   initAudio();
-  requestTiltPermission();
 
   if (!marchPlaying && audioStarted && state === 'title') {
     stopDeathMarchTheme();
@@ -1385,6 +1399,7 @@ function drawHUD() {
       ctx.fillStyle = '#555';
       ctx.font = '10px monospace';
       ctx.fillText('TILT', canvas.width - margin, by + barH + 12);
+      ctx.fillText('2-finger tap to recalibrate', canvas.width - margin, by + barH + 24);
     }
 
     // Touch thrust indicator — flame icon bottom-centre when thrusting via touch
