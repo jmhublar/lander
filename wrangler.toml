@@ -6,4 +6,4 @@ compatibility_date = "2024-01-01"
 binding = "SCORES"
 # Replace with your KV namespace ID after running:
 #   wrangler kv:namespace create SCORES
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "ba1dc56821984c3f8be2a6ebc0ee985b"
