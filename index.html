@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Moonlander</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -576,6 +576,86 @@ window.addEventListener('click', () => {
   }
 }, { once: false });
 
+// ─── Mobile / Touch Controls ──────────────────────────────────────
+// Detect touch device
+const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+// Touch state
+let touchThrusting = false;        // screen press = thrust
+let tiltAngle = 0;                 // smoothed device tilt (radians)
+let tiltAvailable = false;         // whether DeviceOrientation fired
+let tiltRaw = 0;                   // raw gamma from sensor
+
+// Request permission on iOS 13+ then start listening
+function requestTiltPermission() {
+  if (typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    DeviceOrientationEvent.requestPermission()
+      .then(r => { if (r === 'granted') startTiltListener(); })
+      .catch(() => {});
+  } else {
+    startTiltListener();
+  }
+}
+
+function startTiltListener() {
+  window.addEventListener('deviceorientation', e => {
+    // gamma = left/right tilt: -90 (left) to +90 (right)
+    if (e.gamma === null) return;
+    tiltAvailable = true;
+    // Clamp to ±45° and normalise to a rotation rate
+    tiltRaw = Math.max(-45, Math.min(45, e.gamma));
+  }, { passive: true });
+}
+
+// Touchstart: thrust on, handle title/crash taps, init audio
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  initAudio();
+  requestTiltPermission();
+
+  if (!marchPlaying && audioStarted && state === 'title') {
+    stopDeathMarchTheme();
+    playMarchTheme();
+  }
+
+  // Tap to advance state (same as Space)
+  if (state === 'title') {
+    stopMarchTheme();
+    stopDeathMarchTheme();
+    playStartJingle();
+    lives = STARTING_LIVES;
+    score = 0;
+    startLevel(1);
+    return;
+  }
+  if (state === 'landed') { startLevel(level + 1); return; }
+  if (state === 'crashed') { startLevel(level); return; }
+  if (state === 'gameOver') {
+    stopDeathMarchTheme();
+    state = 'title';
+    lives = STARTING_LIVES;
+    score = 0;
+    level = 1;
+    stars = generateStars();
+    playMarchTheme();
+    return;
+  }
+
+  // Playing: finger down = thrust
+  touchThrusting = true;
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  if (e.touches.length === 0) touchThrusting = false;
+}, { passive: false });
+
+canvas.addEventListener('touchcancel', e => {
+  e.preventDefault();
+  touchThrusting = false;
+}, { passive: false });
+
 // ─── Procedural Terrain ─────────────────────────────────────────────
 function generateTerrain(lvl) {
   const w = canvas.width;
@@ -816,11 +896,25 @@ function update() {
 
   // Input (disabled when out of bounds)
   if (!lander.outOfBounds) {
+    // Keyboard rotation
     if (keys['ArrowLeft'] || keys['KeyA']) lander.angle -= ROTATION_SPEED;
     if (keys['ArrowRight'] || keys['KeyD']) lander.angle += ROTATION_SPEED;
-    lander.thrusting = keys['ArrowUp'] || keys['KeyW'];
+
+    // Tilt rotation — smooth the raw sensor value and convert to angular delta
+    if (tiltAvailable) {
+      // Lerp tiltAngle toward raw sensor reading (in radians, scaled)
+      const targetTilt = tiltRaw * (Math.PI / 180) * 0.8; // max ~36° target
+      tiltAngle += (targetTilt - tiltAngle) * 0.15;
+      // Apply as a direct angular velocity proportional to tilt magnitude
+      const tiltRate = tiltAngle * 0.035; // tuned feel
+      lander.angle += tiltRate;
+    }
+
+    // Thrust: keyboard OR touch press
+    lander.thrusting = !!(keys['ArrowUp'] || keys['KeyW'] || touchThrusting);
   } else {
     lander.thrusting = false;
+    touchThrusting = false;
   }
 
   // Physics
@@ -972,8 +1066,9 @@ function render() {
   drawHUD();
 
   // Messages (screen space)
-  if (state === 'landed') drawMessage('LANDED!', '#44ff88', 'SPACE for next level');
-  if (state === 'crashed') drawMessage('CRASHED!', '#ff4444', `LIVES: ${lives}  —  SPACE to retry`);
+  const advancePrompt = isTouchDevice ? 'TAP' : 'SPACE';
+  if (state === 'landed') drawMessage('LANDED!', '#44ff88', `${advancePrompt} for next level`);
+  if (state === 'crashed') drawMessage('CRASHED!', '#ff4444', `LIVES: ${lives}  —  ${advancePrompt} to retry`);
 }
 
 function drawStarsStatic() {
@@ -1001,14 +1096,19 @@ function drawTitle() {
 
   ctx.font = '16px monospace';
   ctx.fillStyle = '#888';
-  ctx.fillText('Arrow keys or WASD to fly', cx, cy + 20);
+  if (isTouchDevice) {
+    ctx.fillText('Tilt to steer · Hold to thrust', cx, cy + 20);
+  } else {
+    ctx.fillText('Arrow keys or WASD to fly', cx, cy + 20);
+  }
   ctx.fillText('Land gently on the pads', cx, cy + 45);
   ctx.fillText(`High score: ${highScore}`, cx, cy + 70);
 
   ctx.fillStyle = '#44ff88';
   ctx.font = '20px monospace';
   const blink = Math.sin(Date.now() / 400) > 0;
-  if (blink) ctx.fillText('PRESS SPACE TO START', cx, cy + 120);
+  const prompt = isTouchDevice ? 'TAP TO START' : 'PRESS SPACE TO START';
+  if (blink) ctx.fillText(prompt, cx, cy + 120);
 }
 
 function drawBoundary() {
@@ -1241,6 +1341,48 @@ function drawHUD() {
 
     ctx.fillStyle = Math.abs(lander.angle) > MAX_SAFE_ANGLE ? '#ff4444' : '#44ff88';
     ctx.fillText(`ANG ${angle}°`, canvas.width - margin, margin + 50);
+
+    // Mobile tilt bar — shown when tilt sensor is active
+    if (tiltAvailable) {
+      const barW = 80, barH = 10;
+      const bx = canvas.width - margin - barW;
+      const by = margin + 62;
+      // Background track
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(bx, by, barW, barH);
+      // Centre line
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.fillRect(bx + barW / 2 - 1, by - 2, 2, barH + 4);
+      // Tilt indicator dot — tiltRaw in ±45 range → ±barW/2
+      const dotX = bx + barW / 2 + (tiltRaw / 45) * (barW / 2);
+      const dotCx = Math.max(bx + 5, Math.min(bx + barW - 5, dotX));
+      ctx.fillStyle = touchThrusting ? '#ffcc00' : '#44aaff';
+      ctx.beginPath();
+      ctx.arc(dotCx, by + barH / 2, 6, 0, Math.PI * 2);
+      ctx.fill();
+      // Label
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#555';
+      ctx.font = '10px monospace';
+      ctx.fillText('TILT', canvas.width - margin, by + barH + 12);
+    }
+
+    // Touch thrust indicator — flame icon bottom-centre when thrusting via touch
+    if (isTouchDevice) {
+      const tx = canvas.width / 2;
+      const ty = canvas.height - 40;
+      const alpha = touchThrusting ? 0.9 : 0.25;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = touchThrusting ? '#ffcc00' : '#fff';
+      ctx.font = '28px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('🔥', tx, ty);
+      ctx.globalAlpha = 1;
+      // Small label
+      ctx.fillStyle = touchThrusting ? '#ffaa00' : '#444';
+      ctx.font = '11px monospace';
+      ctx.fillText('HOLD TO THRUST', tx, ty + 18);
+    }
   }
 }
 
@@ -1268,7 +1410,7 @@ function drawGameOver() {
   if (blink) {
     ctx.fillStyle = '#ccc';
     ctx.font = '20px monospace';
-    ctx.fillText('PRESS SPACE', cx, cy + 130);
+    ctx.fillText(isTouchDevice ? 'TAP TO CONTINUE' : 'PRESS SPACE', cx, cy + 130);
   }
 }
 
