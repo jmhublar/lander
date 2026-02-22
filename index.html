@@ -577,14 +577,18 @@ window.addEventListener('click', () => {
 }, { once: false });
 
 // ─── Mobile / Touch Controls ──────────────────────────────────────
-// Detect touch device
+// Static hint for layout decisions (keyboard instructions etc.)
 const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+// hasTouched flips true the moment a real touch event fires — also catches
+// Chrome DevTools mobile emulation which may not set the static flags.
+let hasTouched = false;
 
 // Touch state
 let touchThrusting = false;        // screen press = thrust
 let tiltAngle = 0;                 // smoothed device tilt (radians)
 let tiltAvailable = false;         // whether DeviceOrientation fired
-let tiltRaw = 0;                   // raw gamma from sensor
+let tiltRaw = 0;                   // raw delta-gamma from sensor (relative to calibrated neutral)
+let tiltBaseline = null;           // gamma at the moment the player first tilts
 
 // Request permission on iOS 13+ then start listening
 function requestTiltPermission() {
@@ -600,17 +604,27 @@ function requestTiltPermission() {
 
 function startTiltListener() {
   window.addEventListener('deviceorientation', e => {
-    // gamma = left/right tilt: -90 (left) to +90 (right)
+    // gamma = left/right tilt of the phone: -90 (left) to +90 (right)
     if (e.gamma === null) return;
     tiltAvailable = true;
-    // Clamp to ±45° and normalise to a rotation rate
-    tiltRaw = Math.max(-45, Math.min(45, e.gamma));
+    // Calibrate: record the neutral gamma the first time we get a reading.
+    // This lets the player hold the phone at whatever comfortable angle they
+    // like — only deviations from that baseline steer the ship.
+    if (tiltBaseline === null) tiltBaseline = e.gamma;
+    // Delta from neutral, clamped to ±45°
+    tiltRaw = Math.max(-45, Math.min(45, e.gamma - tiltBaseline));
   }, { passive: true });
+}
+
+// Recalibrate tilt baseline (resets neutral angle to current phone position)
+function recalibrateTilt() {
+  tiltBaseline = null; // next orientation event will set a new baseline
 }
 
 // Touchstart: thrust on, handle title/crash taps, init audio
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
+  hasTouched = true;
   initAudio();
   requestTiltPermission();
 
@@ -643,6 +657,10 @@ canvas.addEventListener('touchstart', e => {
   }
 
   // Playing: finger down = thrust
+  // Two-finger tap recalibrates tilt baseline
+  if (e.touches.length >= 2) {
+    recalibrateTilt();
+  }
   touchThrusting = true;
 }, { passive: false });
 
@@ -1066,7 +1084,7 @@ function render() {
   drawHUD();
 
   // Messages (screen space)
-  const advancePrompt = isTouchDevice ? 'TAP' : 'SPACE';
+  const advancePrompt = (isTouchDevice || hasTouched) ? 'TAP' : 'SPACE';
   if (state === 'landed') drawMessage('LANDED!', '#44ff88', `${advancePrompt} for next level`);
   if (state === 'crashed') drawMessage('CRASHED!', '#ff4444', `LIVES: ${lives}  —  ${advancePrompt} to retry`);
 }
@@ -1096,7 +1114,8 @@ function drawTitle() {
 
   ctx.font = '16px monospace';
   ctx.fillStyle = '#888';
-  if (isTouchDevice) {
+  const onMobile = isTouchDevice || hasTouched;
+  if (onMobile) {
     ctx.fillText('Tilt to steer · Hold to thrust', cx, cy + 20);
   } else {
     ctx.fillText('Arrow keys or WASD to fly', cx, cy + 20);
@@ -1107,7 +1126,7 @@ function drawTitle() {
   ctx.fillStyle = '#44ff88';
   ctx.font = '20px monospace';
   const blink = Math.sin(Date.now() / 400) > 0;
-  const prompt = isTouchDevice ? 'TAP TO START' : 'PRESS SPACE TO START';
+  const prompt = onMobile ? 'TAP TO START' : 'PRESS SPACE TO START';
   if (blink) ctx.fillText(prompt, cx, cy + 120);
 }
 
@@ -1368,7 +1387,7 @@ function drawHUD() {
     }
 
     // Touch thrust indicator — flame icon bottom-centre when thrusting via touch
-    if (isTouchDevice) {
+    if (isTouchDevice || hasTouched) {
       const tx = canvas.width / 2;
       const ty = canvas.height - 40;
       const alpha = touchThrusting ? 0.9 : 0.25;
@@ -1410,7 +1429,7 @@ function drawGameOver() {
   if (blink) {
     ctx.fillStyle = '#ccc';
     ctx.font = '20px monospace';
-    ctx.fillText(isTouchDevice ? 'TAP TO CONTINUE' : 'PRESS SPACE', cx, cy + 130);
+    ctx.fillText((isTouchDevice || hasTouched) ? 'TAP TO CONTINUE' : 'PRESS SPACE', cx, cy + 130);
   }
 }
 
