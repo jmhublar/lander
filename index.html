@@ -281,13 +281,16 @@ function stopMarchTheme() {
     clearTimeout(marchTimeout);
     marchTimeout = null;
   }
-  // Fade out the march
-  if (marchGainNode) {
-    marchGainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+  if (marchGainNode && audioCtx) {
+    const now = audioCtx.currentTime;
+    marchGainNode.gain.cancelScheduledValues(now);
+    marchGainNode.gain.setValueAtTime(marchGainNode.gain.value, now);
+    marchGainNode.gain.linearRampToValueAtTime(0, now + 0.3);
+    const captured = marchOscillators.splice(0);
     setTimeout(() => {
-      marchOscillators.forEach(o => { try { o.stop(); } catch(e) {} });
-      marchOscillators = [];
+      captured.forEach(o => { try { o.stop(); } catch(e) {} });
     }, 400);
+    marchGainNode = null;
   }
 }
 
@@ -421,11 +424,15 @@ function stopDeathMarchTheme() {
     deathMarchTimeout = null;
   }
   if (deathMarchGainNode && audioCtx) {
-    deathMarchGainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+    const now = audioCtx.currentTime;
+    deathMarchGainNode.gain.cancelScheduledValues(now);
+    deathMarchGainNode.gain.setValueAtTime(deathMarchGainNode.gain.value, now);
+    deathMarchGainNode.gain.linearRampToValueAtTime(0, now + 0.3);
+    const captured = deathMarchOscillators.splice(0);
     setTimeout(() => {
-      deathMarchOscillators.forEach(o => { try { o.stop(); } catch (e) {} });
-      deathMarchOscillators = [];
+      captured.forEach(o => { try { o.stop(); } catch (e) {} });
     }, 400);
+    deathMarchGainNode = null;
   }
 }
 
@@ -594,16 +601,20 @@ let iosTiltPermissionNeeded = (typeof DeviceOrientationEvent !== 'undefined' &&
   typeof DeviceOrientationEvent.requestPermission === 'function');
 let showTiltButton = iosTiltPermissionNeeded; // show button on iOS until granted
 
+// tiltBtn must be declared before startTiltListener so the handler can hide it
+const tiltBtn = document.getElementById('tiltBtn');
+if (iosTiltPermissionNeeded) tiltBtn.style.display = 'block';
+
 function startTiltListener() {
   if (tiltListenerStarted) return;
   tiltListenerStarted = true;
   window.addEventListener('deviceorientation', e => {
     if (e.gamma === null) return;
     tiltAvailable = true;
-    showTiltButton = false; // hide button once events flow
+    showTiltButton = false;
+    tiltBtn.style.display = 'none'; // hide once sensor fires
     if (tiltBaseline === null) tiltBaseline = e.gamma;
     tiltRaw = Math.max(-45, Math.min(45, e.gamma - tiltBaseline));
-    if (tiltAvailable) tiltBtn.style.display = 'none';
   }, { passive: true });
 }
 
@@ -623,18 +634,15 @@ function recalibrateTilt() {
   tiltBaseline = null;
 }
 
-// Start listening immediately for non-iOS devices
-if (!iosTiltPermissionNeeded) {
-  startTiltListener();
-}
-
-// ─── Tilt Button (iOS permission) ────────────────────────────────────
-const tiltBtn = document.getElementById('tiltBtn');
-if (iosTiltPermissionNeeded) tiltBtn.style.display = 'block';
 tiltBtn.addEventListener('click', () => {
   requestIOSTiltPermission();
   tiltBtn.style.display = 'none';
 });
+
+// Start listening immediately for non-iOS devices
+if (!iosTiltPermissionNeeded) {
+  startTiltListener();
+}
 
 // Touchstart: thrust on, handle title/crash taps, init audio
 canvas.addEventListener('touchstart', e => {
