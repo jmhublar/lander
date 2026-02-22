@@ -145,6 +145,203 @@ function updateThrustSound(isThrusting) {
   }
 }
 
+// ─── March Theme Song ─────────────────────────────────────────────
+let marchPlaying = false;
+let marchTimeout = null;
+let marchOscillators = [];
+let marchGainNode = null;
+
+function playMarchTheme() {
+  if (!audioCtx || marchPlaying) return;
+  marchPlaying = true;
+
+  // Master gain for the march
+  marchGainNode = audioCtx.createGain();
+  marchGainNode.gain.value = 0.25;
+  marchGainNode.connect(audioCtx.destination);
+
+  // March melody – triumphant, militaristic fanfare in C major
+  // Each note: [frequency, duration in ms, startTime in ms]
+  const BPM = 140;
+  const Q = 60000 / BPM; // quarter note ms
+  const E = Q / 2;       // eighth note
+  const H = Q * 2;       // half note
+  const W = Q * 4;       // whole note
+
+  // Frequencies (Hz)
+  const C4=261.63, D4=293.66, E4=329.63, F4=349.23, G4=392.00, A4=440.00, B4=493.88;
+  const C5=523.25, D5=587.33, E5=659.25, G5=783.99;
+  const C3=130.81, G3=196.00, F3=174.61, E3=164.81, A3=220.00, B3=246.94;
+
+  // Melody line - heroic march fanfare
+  const melody = [
+    [C4, E, 0], [C4, E, E], [G4, Q, E*2], [G4, E, E*2+Q], [A4, E, E*3+Q],
+    [G4, Q, E*4+Q], [E4, Q, E*4+Q+Q],
+    [C4, E, E*4+Q+Q+Q], [C4, E, E*5+Q+Q+Q], [G4, Q, E*6+Q+Q+Q],
+    [G4, E, E*6+Q*2+Q], [A4, E, E*7+Q*2+Q], [G4, H, E*8+Q*2+Q],
+    // Second phrase - ascending triumphant
+    [E4, E, E*8+Q*2+Q+H], [F4, E, E*9+Q*2+Q+H], [G4, E, E*10+Q*2+Q+H],
+    [A4, Q, E*11+Q*2+Q+H], [G4, E, E*11+Q*3+Q+H], [E4, E, E*12+Q*3+Q+H],
+    [C5, Q+E, E*13+Q*3+Q+H], [B4, E, E*13+Q*4+Q+E+H],
+    [A4, E, E*14+Q*4+Q+E+H], [G4, H, E*15+Q*4+Q+E+H],
+    // Resolve
+    [E4, E, E*15+Q*4+Q+E+H+H], [D4, E, E*16+Q*4+Q+E+H+H],
+    [C4, H+Q, E*17+Q*4+Q+E+H+H],
+  ];
+
+  // Bass line - rhythmic march bass
+  const bassLine = [
+    [C3, Q, 0], [G3, Q, Q], [C3, Q, Q*2], [G3, Q, Q*3],
+    [C3, Q, Q*4], [G3, Q, Q*5], [C3, Q, Q*6], [G3, Q, Q*7],
+    [A3, Q, Q*8], [E3, Q, Q*9], [F3, Q, Q*10], [G3, Q, Q*11],
+    [C3, Q, Q*12], [G3, Q, Q*13], [C3, H, Q*14],
+  ];
+
+  // Snare hits (noise bursts) on beats 2 and 4
+  const snareHits = [];
+  for (let i = 0; i < 16; i++) {
+    if (i % 2 === 1) snareHits.push(i * Q);
+  }
+
+  // Calculate total loop duration
+  const loopDuration = Q * 16;
+
+  function scheduleLoop() {
+    if (!marchPlaying) return;
+    const now = audioCtx.currentTime;
+
+    // Schedule melody
+    melody.forEach(([freq, dur, start]) => {
+      const osc = audioCtx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0, now + start / 1000);
+      g.gain.linearRampToValueAtTime(0.15, now + start / 1000 + 0.01);
+      g.gain.setValueAtTime(0.15, now + (start + dur * 0.7) / 1000);
+      g.gain.linearRampToValueAtTime(0, now + (start + dur) / 1000);
+      osc.connect(g);
+      g.connect(marchGainNode);
+      osc.start(now + start / 1000);
+      osc.stop(now + (start + dur + 10) / 1000);
+      marchOscillators.push(osc);
+    });
+
+    // Schedule bass
+    bassLine.forEach(([freq, dur, start]) => {
+      const osc = audioCtx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0, now + start / 1000);
+      g.gain.linearRampToValueAtTime(0.2, now + start / 1000 + 0.01);
+      g.gain.setValueAtTime(0.2, now + (start + dur * 0.6) / 1000);
+      g.gain.linearRampToValueAtTime(0, now + (start + dur) / 1000);
+      osc.connect(g);
+      g.connect(marchGainNode);
+      osc.start(now + start / 1000);
+      osc.stop(now + (start + dur + 10) / 1000);
+      marchOscillators.push(osc);
+    });
+
+    // Schedule snare-like bursts
+    snareHits.forEach(start => {
+      const bufLen = Math.floor(audioCtx.sampleRate * 0.05);
+      const buf = audioCtx.createBuffer(1, bufLen, audioCtx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufLen; i++) {
+        data[i] = (Math.random() * 2 - 1) * (1 - i / bufLen);
+      }
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      const hp = audioCtx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 2000;
+      const g = audioCtx.createGain();
+      g.gain.value = 0.12;
+      src.connect(hp);
+      hp.connect(g);
+      g.connect(marchGainNode);
+      src.start(now + start / 1000);
+      marchOscillators.push(src);
+    });
+
+    // Schedule next loop
+    marchTimeout = setTimeout(scheduleLoop, loopDuration - 50);
+  }
+
+  scheduleLoop();
+}
+
+function stopMarchTheme() {
+  marchPlaying = false;
+  if (marchTimeout) {
+    clearTimeout(marchTimeout);
+    marchTimeout = null;
+  }
+  // Fade out the march
+  if (marchGainNode) {
+    marchGainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+    setTimeout(() => {
+      marchOscillators.forEach(o => { try { o.stop(); } catch(e) {} });
+      marchOscillators = [];
+    }, 400);
+  }
+}
+
+// ─── 80s Arcade Start Jingle ──────────────────────────────────────
+function playStartJingle() {
+  if (!audioCtx) return;
+
+  // Classic 80s arcade startup: rapid ascending arpeggios with square waves
+  const now = audioCtx.currentTime;
+  const jingleGain = audioCtx.createGain();
+  jingleGain.gain.value = 0.2;
+  jingleGain.connect(audioCtx.destination);
+
+  // Notes: fast ascending arpeggio → held chord → descending cascade → final chord
+  const notes = [
+    // Rapid ascending arpeggio (16th notes)
+    { f: 262, t: 0,    d: 0.06, wave: 'square' },
+    { f: 330, t: 0.07, d: 0.06, wave: 'square' },
+    { f: 392, t: 0.14, d: 0.06, wave: 'square' },
+    { f: 523, t: 0.21, d: 0.06, wave: 'square' },
+    // Brief pause, then second arpeggio higher
+    { f: 330, t: 0.35, d: 0.06, wave: 'square' },
+    { f: 392, t: 0.42, d: 0.06, wave: 'square' },
+    { f: 523, t: 0.49, d: 0.06, wave: 'square' },
+    { f: 659, t: 0.56, d: 0.06, wave: 'square' },
+    // Triumphant held notes
+    { f: 784, t: 0.70, d: 0.20, wave: 'square' },
+    { f: 659, t: 0.70, d: 0.20, wave: 'square' },  // harmony
+    { f: 523, t: 0.70, d: 0.20, wave: 'triangle' }, // bass
+    // Final resolving chord
+    { f: 1047, t: 0.95, d: 0.35, wave: 'square' },
+    { f: 784,  t: 0.95, d: 0.35, wave: 'square' },
+    { f: 523,  t: 0.95, d: 0.35, wave: 'triangle' },
+    { f: 262,  t: 0.95, d: 0.35, wave: 'triangle' },
+  ];
+
+  notes.forEach(n => {
+    const osc = audioCtx.createOscillator();
+    osc.type = n.wave;
+    osc.frequency.value = n.f;
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0, now + n.t);
+    g.gain.linearRampToValueAtTime(0.18, now + n.t + 0.01);
+    g.gain.setValueAtTime(0.18, now + n.t + n.d * 0.7);
+    g.gain.linearRampToValueAtTime(0, now + n.t + n.d);
+    osc.connect(g);
+    g.connect(jingleGain);
+    osc.start(now + n.t);
+    osc.stop(now + n.t + n.d + 0.05);
+  });
+
+  // Fade out the jingle gain at the end
+  jingleGain.gain.setValueAtTime(0.2, now + 1.3);
+  jingleGain.gain.linearRampToValueAtTime(0, now + 1.4);
+}
+
 // ─── Constants ───────────────────────────────────────────────────────
 const GRAVITY = 0.006;
 const THRUST = 0.025;
@@ -169,7 +366,15 @@ let camera = { x: 0, y: 0, zoom: 1, targetZoom: 1 };
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
   initAudio();
-  if (state === 'title' && e.code === 'Space') startLevel(1);
+  // Start march theme on first interaction if on title
+  if (state === 'title' && !marchPlaying && audioStarted) {
+    playMarchTheme();
+  }
+  if (state === 'title' && e.code === 'Space') {
+    stopMarchTheme();
+    playStartJingle();
+    startLevel(1);
+  }
   if ((state === 'landed' || state === 'crashed') && e.code === 'Space') {
     if (state === 'landed') {
       startLevel(level + 1);
@@ -179,6 +384,13 @@ window.addEventListener('keydown', e => {
   }
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
+// Also start march on click/tap (for mobile or if user clicks first)
+window.addEventListener('click', () => {
+  initAudio();
+  if (state === 'title' && !marchPlaying && audioStarted) {
+    playMarchTheme();
+  }
+}, { once: false });
 
 // ─── Procedural Terrain ─────────────────────────────────────────────
 function generateTerrain(lvl) {
