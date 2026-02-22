@@ -585,12 +585,12 @@ let hasTouched = false;
 
 // Touch state
 let touchThrusting = false;        // screen press = thrust
-let tiltAngle = 0;                 // smoothed device tilt (radians)
 let tiltAvailable = false;         // whether DeviceOrientation fired
 let tiltRaw = 0;                   // raw delta-gamma from sensor (relative to calibrated neutral)
 let tiltBaseline = null;           // gamma at the moment the player first tilts
 
-// Request permission on iOS 13+ then start listening
+// Request permission on iOS 13+ then start listening (called once)
+let tiltListenerStarted = false;
 function requestTiltPermission() {
   if (typeof DeviceOrientationEvent !== 'undefined' &&
       typeof DeviceOrientationEvent.requestPermission === 'function') {
@@ -603,13 +603,13 @@ function requestTiltPermission() {
 }
 
 function startTiltListener() {
+  if (tiltListenerStarted) return; // only register once
+  tiltListenerStarted = true;
   window.addEventListener('deviceorientation', e => {
     // gamma = left/right tilt of the phone: -90 (left) to +90 (right)
     if (e.gamma === null) return;
     tiltAvailable = true;
-    // Calibrate: record the neutral gamma the first time we get a reading.
-    // This lets the player hold the phone at whatever comfortable angle they
-    // like — only deviations from that baseline steer the ship.
+    // Calibrate on first reading so any hold angle is "neutral"
     if (tiltBaseline === null) tiltBaseline = e.gamma;
     // Delta from neutral, clamped to ±45°
     tiltRaw = Math.max(-45, Math.min(45, e.gamma - tiltBaseline));
@@ -918,14 +918,15 @@ function update() {
     if (keys['ArrowLeft'] || keys['KeyA']) lander.angle -= ROTATION_SPEED;
     if (keys['ArrowRight'] || keys['KeyD']) lander.angle += ROTATION_SPEED;
 
-    // Tilt rotation — smooth the raw sensor value and convert to angular delta
+    // Tilt rotation — map phone lean directly to rotation speed
     if (tiltAvailable) {
-      // Lerp tiltAngle toward raw sensor reading (in radians, scaled)
-      const targetTilt = tiltRaw * (Math.PI / 180) * 0.8; // max ~36° target
-      tiltAngle += (targetTilt - tiltAngle) * 0.15;
-      // Apply as a direct angular velocity proportional to tilt magnitude
-      const tiltRate = tiltAngle * 0.035; // tuned feel
-      lander.angle += tiltRate;
+      // tiltRaw is ±45°. Dead-zone the centre 3° to ignore hand tremor.
+      const dead = 3;
+      const t = Math.abs(tiltRaw) < dead ? 0
+                : (tiltRaw - Math.sign(tiltRaw) * dead) / (45 - dead);
+      // t is now ±1 at full lean. Drive rotation speed like arrow keys but
+      // proportional — feels natural and snappy.
+      lander.angle += t * ROTATION_SPEED * 1.8;
     }
 
     // Thrust: keyboard OR touch press
