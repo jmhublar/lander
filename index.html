@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Moonlander</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ─── Setup ───────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  canvas.width = document.documentElement.clientWidth || window.innerWidth;
+  canvas.height = document.documentElement.clientHeight || window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+// Re-resize after a tick in case layout wasn't ready
+setTimeout(resize, 50);
+
+// ─── Constants ───────────────────────────────────────────────────────
+const GRAVITY = 0.006;
+const THRUST = 0.025;
+const ROTATION_SPEED = 0.015;
+const MAX_SAFE_VY = 1.0;
+const MAX_SAFE_VX = 0.6;
+const MAX_SAFE_ANGLE = 0.35; // ~20 degrees
+const LANDER_SIZE = 14;
+const BOUNDARY_MARGIN = 0.15; // boundary at 15% beyond screen edges
+
+// ─── Game State ──────────────────────────────────────────────────────
+let state = 'title'; // title, playing, landed, crashed, levelComplete
+let level = 1;
+let score = 0;
+let lander, terrain, landingPads, stars;
+let particles = [];
+let keys = {};
+let messageTimer = 0;
+let camera = { x: 0, y: 0, zoom: 1, targetZoom: 1 };
+
+// ─── Input ───────────────────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (state === 'title' && e.code === 'Space') startLevel(1);
+  if ((state === 'landed' || state === 'crashed') && e.code === 'Space') {
+    if (state === 'landed') {
+      startLevel(level + 1);
+    } else {
+      startLevel(level);
+    }
+  }
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ─── Procedural Terrain ─────────────────────────────────────────────
+function generateTerrain(lvl) {
+  const w = canvas.width;
+  const h = canvas.height;
+  const seed = lvl * 7919;
+  const rng = mulberry32(seed);
+
+  const points = [];
+  // Extra terrain on each side for zoom-out (~3x screen width each side)
+  const segCount = 60 + Math.floor(lvl * 10);
+  const segWidth = w / segCount;
+  const extraSegs = Math.ceil(segCount * 3);
+  const totalSegs = segCount + extraSegs * 2;
+
+  // Determine number of landing pads (fewer as level increases)
+  const padCount = Math.max(1, 3 - Math.floor(lvl / 3));
+  const padWidth = Math.max(3, 6 - Math.floor(lvl / 2)); // in segments
+
+  // Choose pad positions within the main visible area (avoid edges)
+  const pads = [];
+  const usedSegs = new Set();
+  for (let p = 0; p < padCount; p++) {
+    let attempts = 0;
+    let pos;
+    do {
+      pos = Math.floor(rng() * (segCount - padWidth - 10)) + 5;
+      attempts++;
+    } while (attempts < 100 && [...usedSegs].some(s => Math.abs(s - pos) < padWidth + 5));
+    pads.push({ start: pos + extraSegs, width: padWidth });
+    for (let i = pos; i < pos + padWidth; i++) usedSegs.add(i);
+  }
+
+  // Generate heightmap
+  const baseHeight = h * 0.75;
+  const roughness = 0.3 + lvl * 0.05;
+  let currentHeight = baseHeight + (rng() - 0.5) * h * 0.1;
+
+  for (let i = 0; i <= totalSegs; i++) {
+    const x = (i - extraSegs) * segWidth;
+    // Check if this segment is part of a landing pad
+    const pad = pads.find(p => i >= p.start && i <= p.start + p.width);
+    if (pad) {
+      // Flat surface for landing pad
+      if (i === pad.start) {
+        pad.y = currentHeight;
+      }
+      points.push({ x, y: pad.y });
+    } else {
+      currentHeight += (rng() - 0.5) * 40 * roughness;
+      currentHeight = Math.max(h * 0.5, Math.min(h * 0.9, currentHeight));
+      points.push({ x, y: currentHeight });
+    }
+  }
+
+  // Build landing pad metadata (convert from segment index to world x)
+  const landingPadsMeta = pads.map(p => ({
+    x1: (p.start - extraSegs) * segWidth,
+    x2: (p.start + p.width - extraSegs) * segWidth,
+    y: p.y,
+    cx: (p.start + p.width / 2 - extraSegs) * segWidth
+  }));
+
+  return { points, landingPads: landingPadsMeta };
+}
+
+// ─── Seeded RNG ──────────────────────────────────────────────────────
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// ─── Stars ───────────────────────────────────────────────────────────
+function generateStars() {
+  const s = [];
+  for (let i = 0; i < 200; i++) {
+    s.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height * 0.7,
+      size: Math.random() * 1.5 + 0.5,
+      brightness: Math.random() * 0.5 + 0.5
+    });
+  }
+  return s;
+}
+
+// ─── Particles ───────────────────────────────────────────────────────
+function spawnThrustParticles(x, y, angle) {
+  for (let i = 0; i < 2; i++) {
+    const spread = (Math.random() - 0.5) * 0.5;
+    particles.push({
+      x, y,
+      vx: -Math.sin(angle + spread) * (2 + Math.random() * 2),
+      vy: Math.cos(angle + spread) * (2 + Math.random() * 2),
+      life: 1.0,
+      decay: 0.02 + Math.random() * 0.03,
+      size: Math.random() * 3 + 1
+    });
+  }
+}
+
+function spawnExplosion(x, y) {
+  for (let i = 0; i < 60; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const speed = Math.random() * 4 + 1;
+    particles.push({
+      x, y,
+      vx: Math.cos(a) * speed,
+      vy: Math.sin(a) * speed,
+      life: 1.0,
+      decay: 0.01 + Math.random() * 0.02,
+      size: Math.random() * 4 + 1,
+      color: ['#ff4400', '#ff8800', '#ffcc00', '#ffffff'][Math.floor(Math.random() * 4)]
+    });
+  }
+}
+
+function spawnLandingParticles(x, y) {
+  for (let i = 0; i < 30; i++) {
+    const a = -Math.PI * Math.random();
+    const speed = Math.random() * 2 + 0.5;
+    particles.push({
+      x, y,
+      vx: Math.cos(a) * speed,
+      vy: Math.sin(a) * speed,
+      life: 1.0,
+      decay: 0.015,
+      size: Math.random() * 2 + 1,
+      color: '#44ff88'
+    });
+  }
+}
+
+// ─── Init Level ──────────────────────────────────────────────────────
+function startLevel(lvl) {
+  level = lvl;
+  state = 'playing';
+  const t = generateTerrain(lvl);
+  terrain = t.points;
+  landingPads = t.landingPads;
+  stars = generateStars();
+  particles = [];
+
+  // Spawn lander at top center
+  lander = {
+    x: canvas.width / 2,
+    y: 60,
+    vx: 0,
+    vy: 0,
+    angle: 0,
+    thrusting: false,
+    outOfBounds: false
+  };
+
+  camera = { x: 0, y: 0, zoom: 1, targetZoom: 1 };
+}
+
+// ─── Collision Detection ─────────────────────────────────────────────
+function getTerrainYAtX(x) {
+  for (let i = 0; i < terrain.length - 1; i++) {
+    if (x >= terrain[i].x && x <= terrain[i + 1].x) {
+      const t = (x - terrain[i].x) / (terrain[i + 1].x - terrain[i].x);
+      return terrain[i].y + t * (terrain[i + 1].y - terrain[i].y);
+    }
+  }
+  return canvas.height;
+}
+
+function checkLanding() {
+  const footY = lander.y + LANDER_SIZE;
+  const terrainY = getTerrainYAtX(lander.x);
+
+  if (footY >= terrainY) {
+    // Check if on a landing pad
+    const pad = landingPads.find(p =>
+      lander.x >= p.x1 + 5 && lander.x <= p.x2 - 5 &&
+      Math.abs(footY - p.y) < 8
+    );
+
+    const safeLanding =
+      Math.abs(lander.vy) <= MAX_SAFE_VY &&
+      Math.abs(lander.vx) <= MAX_SAFE_VX &&
+      Math.abs(lander.angle) <= MAX_SAFE_ANGLE;
+
+    if (pad && safeLanding) {
+      state = 'landed';
+      lander.y = pad.y - LANDER_SIZE;
+      lander.vx = 0;
+      lander.vy = 0;
+      lander.angle = 0;
+      // Score based on precision and speed
+      const vBonus = Math.floor((1 - Math.abs(lander.vy) / MAX_SAFE_VY) * 50);
+      const aBonus = Math.floor((1 - Math.abs(lander.angle) / MAX_SAFE_ANGLE) * 50);
+      const levelBonus = level * 100;
+      score += levelBonus + vBonus + aBonus;
+      spawnLandingParticles(lander.x, pad.y);
+    } else {
+      state = 'crashed';
+      spawnExplosion(lander.x, lander.y);
+    }
+  }
+
+  // Check boundary — mark out of bounds (no more instant crash)
+  const bLeft = -canvas.width * BOUNDARY_MARGIN;
+  const bRight = canvas.width * (1 + BOUNDARY_MARGIN);
+  const bTop = -canvas.height * BOUNDARY_MARGIN;
+  if (lander.x < bLeft || lander.x > bRight || lander.y < bTop) {
+    lander.outOfBounds = true;
+  }
+}
+
+// ─── Update ──────────────────────────────────────────────────────────
+function update() {
+  if (state !== 'playing') {
+    // Update particles even when not playing
+    updateParticles();
+    return;
+  }
+
+  // Input (disabled when out of bounds)
+  if (!lander.outOfBounds) {
+    if (keys['ArrowLeft'] || keys['KeyA']) lander.angle -= ROTATION_SPEED;
+    if (keys['ArrowRight'] || keys['KeyD']) lander.angle += ROTATION_SPEED;
+    lander.thrusting = keys['ArrowUp'] || keys['KeyW'];
+  } else {
+    lander.thrusting = false;
+  }
+
+  // Physics
+  lander.vy += GRAVITY;
+
+  if (lander.thrusting) {
+    lander.vx += Math.sin(lander.angle) * THRUST;
+    lander.vy -= Math.cos(lander.angle) * THRUST;
+    // Thrust particles spawn from rear (bottom of lander in local space)
+    // Local (0, +SIZE) → world (-sin(a)*SIZE, +cos(a)*SIZE)
+    const ex = lander.x - Math.sin(lander.angle) * LANDER_SIZE;
+    const ey = lander.y + Math.cos(lander.angle) * LANDER_SIZE;
+    spawnThrustParticles(ex, ey, lander.angle);
+  }
+
+  lander.x += lander.vx;
+  lander.y += lander.vy;
+
+  // Camera — zoom out if lander is near edges or above screen
+  updateCamera();
+
+  // Collision
+  checkLanding();
+
+  // Particles
+  updateParticles();
+}
+
+function updateCamera() {
+  const W = canvas.width;
+  const H = canvas.height;
+  const margin = 80;
+
+  // Calculate how much we need to zoom out to keep the lander visible
+  // We want the lander to always be within the viewport with some margin
+  let needZoomX = 1;
+  let needZoomY = 1;
+
+  // How far is the lander from center in each axis?
+  const cx = W / 2;
+  const cy = H / 2;
+  const dx = Math.abs(lander.x - cx);
+  const dy = Math.max(0, cy - lander.y); // only care if lander is above center
+
+  // If lander goes beyond the normal viewport, zoom out
+  const maxVisX = (W / 2) - margin;
+  const maxVisY = (H / 2) - margin;
+
+  if (dx > maxVisX) {
+    needZoomX = maxVisX / dx;
+  }
+  if (lander.y < margin) {
+    needZoomY = (H / 2 - margin) / (H / 2 - lander.y + margin);
+  }
+
+  camera.targetZoom = Math.min(1, Math.min(needZoomX, needZoomY));
+  camera.targetZoom = Math.max(0.15, camera.targetZoom); // don't zoom out too far
+
+  // Smooth interpolation
+  camera.zoom += (camera.targetZoom - camera.zoom) * 0.05;
+
+  // Camera centers on midpoint between lander and terrain center when zoomed out
+  if (camera.zoom < 0.98) {
+    camera.x += ((lander.x - cx) * 0.3 - camera.x) * 0.05;
+    camera.y += ((lander.y - cy) * 0.3 - camera.y) * 0.05;
+  } else {
+    camera.x *= 0.95;
+    camera.y *= 0.95;
+  }
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.01; // slight gravity on particles
+    p.life -= p.decay;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+// ─── Render ──────────────────────────────────────────────────────────
+function render() {
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  if (state === 'title') {
+    drawStarsStatic();
+    ctx.globalAlpha = 1;
+    drawTitle();
+    return;
+  }
+
+  // Stars (drawn in screen space, not affected by camera)
+  drawStars();
+
+  // Apply camera transform for world objects
+  ctx.save();
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  ctx.translate(cx, cy);
+  ctx.scale(camera.zoom, camera.zoom);
+  ctx.translate(-cx - camera.x, -cy - camera.y);
+
+  // Terrain
+  drawTerrain();
+
+  // Landing pads
+  drawLandingPads();
+
+  // Particles
+  drawParticles();
+
+  // Boundary lines
+  drawBoundary();
+
+  // Lander
+  if (state !== 'crashed') drawLander();
+
+  ctx.restore();
+
+  // HUD (screen space)
+  drawHUD();
+
+  // Messages (screen space)
+  if (state === 'landed') drawMessage('LANDED!', '#44ff88', 'SPACE for next level');
+  if (state === 'crashed') drawMessage('CRASHED!', '#ff4444', 'SPACE to retry');
+}
+
+function drawStarsStatic() {
+  // Simpler stars for title
+  const rng = mulberry32(42);
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 150; i++) {
+    const x = rng() * canvas.width;
+    const y = rng() * canvas.height;
+    const s = rng() * 1.5 + 0.5;
+    ctx.globalAlpha = rng() * 0.5 + 0.5;
+    ctx.fillRect(x, y, s, s);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawTitle() {
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 48px monospace';
+  ctx.fillText('MOONLANDER', cx, cy - 40);
+
+  ctx.font = '16px monospace';
+  ctx.fillStyle = '#888';
+  ctx.fillText('Arrow keys or WASD to fly', cx, cy + 20);
+  ctx.fillText('Land gently on the pads', cx, cy + 45);
+
+  ctx.fillStyle = '#44ff88';
+  ctx.font = '20px monospace';
+  const blink = Math.sin(Date.now() / 400) > 0;
+  if (blink) ctx.fillText('PRESS SPACE TO START', cx, cy + 100);
+}
+
+function drawBoundary() {
+  const W = canvas.width;
+  const H = canvas.height;
+  const bLeft = -W * BOUNDARY_MARGIN;
+  const bRight = W * (1 + BOUNDARY_MARGIN);
+  const bTop = -H * BOUNDARY_MARGIN;
+
+  // Pulsing red with dashes
+  const pulse = 0.3 + Math.sin(Date.now() / 200) * 0.2;
+  ctx.strokeStyle = `rgba(255, 50, 50, ${pulse})`;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([10, 10]);
+
+  ctx.beginPath();
+  // Left boundary
+  ctx.moveTo(bLeft, bTop);
+  ctx.lineTo(bLeft, H * 4);
+  // Right boundary
+  ctx.moveTo(bRight, bTop);
+  ctx.lineTo(bRight, H * 4);
+  // Top boundary
+  ctx.moveTo(bLeft, bTop);
+  ctx.lineTo(bRight, bTop);
+  ctx.stroke();
+
+  ctx.setLineDash([]);
+
+  // "OUT OF BOUNDS" warning if lander is close to or past boundary
+  if (lander && !lander.outOfBounds) {
+    const warnDist = W * 0.1;
+    const nearLeft = lander.x - bLeft < warnDist;
+    const nearRight = bRight - lander.x < warnDist;
+    const nearTop = lander.y - bTop < warnDist;
+    if (nearLeft || nearRight || nearTop) {
+      ctx.fillStyle = `rgba(255, 50, 50, ${0.5 + Math.sin(Date.now() / 150) * 0.3})`;
+      ctx.font = 'bold 16px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('WARNING', lander.x, lander.y - 30);
+    }
+  }
+
+  // Show "LOST CONTROL" when out of bounds
+  if (lander && lander.outOfBounds) {
+    ctx.fillStyle = `rgba(255, 50, 50, ${0.6 + Math.sin(Date.now() / 100) * 0.4})`;
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('CONTROL LOST', lander.x, lander.y - 120);
+  }
+}
+
+function drawStars() {
+  if (!stars) return;
+  for (const s of stars) {
+    const flicker = 0.8 + Math.sin(Date.now() * 0.001 + s.x) * 0.2;
+    ctx.globalAlpha = s.brightness * flicker;
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(s.x, s.y, s.size, s.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawTerrain() {
+  if (!terrain || terrain.length === 0) return;
+  const lastX = terrain[terrain.length - 1].x;
+  const firstX = terrain[0].x;
+  // Use a large bottom value to cover zoomed-out views
+  const bottom = canvas.height * 4;
+
+  ctx.beginPath();
+  ctx.moveTo(firstX, terrain[0].y);
+  for (let i = 1; i < terrain.length; i++) {
+    ctx.lineTo(terrain[i].x, terrain[i].y);
+  }
+  ctx.lineTo(lastX, bottom);
+  ctx.lineTo(firstX, bottom);
+  ctx.closePath();
+
+  // Gradient fill
+  const grad = ctx.createLinearGradient(0, canvas.height * 0.4, 0, canvas.height);
+  grad.addColorStop(0, '#333');
+  grad.addColorStop(1, '#111');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Outline
+  ctx.beginPath();
+  ctx.moveTo(terrain[0].x, terrain[0].y);
+  for (let i = 1; i < terrain.length; i++) {
+    ctx.lineTo(terrain[i].x, terrain[i].y);
+  }
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+function drawLandingPads() {
+  if (!landingPads) return;
+  for (const pad of landingPads) {
+    // Pad surface
+    ctx.fillStyle = '#44ff88';
+    ctx.fillRect(pad.x1, pad.y - 2, pad.x2 - pad.x1, 4);
+
+    // Blinking markers
+    const blink = Math.sin(Date.now() / 300) > 0;
+    if (blink) {
+      ctx.fillStyle = '#ff4444';
+      ctx.fillRect(pad.x1, pad.y - 5, 3, 5);
+      ctx.fillRect(pad.x2 - 3, pad.y - 5, 3, 5);
+    }
+
+    // Arrow above pad
+    ctx.save();
+    ctx.translate(pad.cx, pad.y - 40 + Math.sin(Date.now() / 500) * 5);
+    ctx.fillStyle = 'rgba(68,255,136,0.4)';
+    ctx.beginPath();
+    ctx.moveTo(0, 10);
+    ctx.lineTo(-6, 0);
+    ctx.lineTo(6, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawLander() {
+  if (!lander) return;
+  ctx.save();
+  ctx.translate(lander.x, lander.y);
+  ctx.rotate(lander.angle);
+
+  // Body
+  ctx.fillStyle = '#ddd';
+  ctx.beginPath();
+  ctx.moveTo(0, -LANDER_SIZE);
+  ctx.lineTo(-LANDER_SIZE * 0.7, LANDER_SIZE * 0.5);
+  ctx.lineTo(LANDER_SIZE * 0.7, LANDER_SIZE * 0.5);
+  ctx.closePath();
+  ctx.fill();
+
+  // Window
+  ctx.fillStyle = '#4488ff';
+  ctx.beginPath();
+  ctx.arc(0, -LANDER_SIZE * 0.3, LANDER_SIZE * 0.25, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Legs
+  ctx.strokeStyle = '#aaa';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-LANDER_SIZE * 0.5, LANDER_SIZE * 0.5);
+  ctx.lineTo(-LANDER_SIZE * 0.8, LANDER_SIZE);
+  ctx.moveTo(LANDER_SIZE * 0.5, LANDER_SIZE * 0.5);
+  ctx.lineTo(LANDER_SIZE * 0.8, LANDER_SIZE);
+  ctx.stroke();
+
+  // Foot pads
+  ctx.fillStyle = '#aaa';
+  ctx.fillRect(-LANDER_SIZE * 0.95, LANDER_SIZE - 1, LANDER_SIZE * 0.3, 3);
+  ctx.fillRect(LANDER_SIZE * 0.65, LANDER_SIZE - 1, LANDER_SIZE * 0.3, 3);
+
+  // Thrust flame
+  if (lander.thrusting && state === 'playing') {
+    const flicker = Math.random() * 8 + 8;
+    const grad = ctx.createLinearGradient(0, LANDER_SIZE * 0.5, 0, LANDER_SIZE * 0.5 + flicker);
+    grad.addColorStop(0, '#ffcc00');
+    grad.addColorStop(0.5, '#ff6600');
+    grad.addColorStop(1, 'rgba(255,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(-LANDER_SIZE * 0.3, LANDER_SIZE * 0.5);
+    ctx.lineTo(LANDER_SIZE * 0.3, LANDER_SIZE * 0.5);
+    ctx.lineTo(0, LANDER_SIZE * 0.5 + flicker);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color || '#ff8800';
+    ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHUD() {
+  const margin = 15;
+  ctx.textAlign = 'left';
+  ctx.font = '14px monospace';
+  ctx.fillStyle = '#888';
+  ctx.fillText(`LEVEL ${level}`, margin, margin + 14);
+  ctx.fillText(`SCORE ${score}`, margin, margin + 32);
+
+  if (state === 'playing' && lander) {
+    ctx.textAlign = 'right';
+    const vx = Math.abs(lander.vx).toFixed(1);
+    const vy = Math.abs(lander.vy).toFixed(1);
+    const angle = (lander.angle * 180 / Math.PI).toFixed(0);
+
+    // Color code velocities
+    ctx.fillStyle = Math.abs(lander.vx) > MAX_SAFE_VX ? '#ff4444' : '#44ff88';
+    ctx.fillText(`VX ${vx}`, canvas.width - margin, margin + 14);
+
+    ctx.fillStyle = Math.abs(lander.vy) > MAX_SAFE_VY ? '#ff4444' : '#44ff88';
+    ctx.fillText(`VY ${vy}`, canvas.width - margin, margin + 32);
+
+    ctx.fillStyle = Math.abs(lander.angle) > MAX_SAFE_ANGLE ? '#ff4444' : '#44ff88';
+    ctx.fillText(`ANG ${angle}°`, canvas.width - margin, margin + 50);
+  }
+}
+
+function drawMessage(text, color, sub) {
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 40px monospace';
+  ctx.fillStyle = color;
+  ctx.fillText(text, cx, cy - 20);
+
+  ctx.font = '16px monospace';
+  ctx.fillStyle = '#888';
+
+  if (state === 'landed') {
+    ctx.fillText(`Level bonus: ${level * 100}`, cx, cy + 15);
+  }
+
+  const blink = Math.sin(Date.now() / 400) > 0;
+  if (blink) {
+    ctx.fillStyle = '#ccc';
+    ctx.fillText(sub, cx, cy + 50);
+  }
+}
+
+// ─── Game Loop ───────────────────────────────────────────────────────
+function loop() {
+  update();
+  render();
+  requestAnimationFrame(loop);
+}
+
+stars = generateStars();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
