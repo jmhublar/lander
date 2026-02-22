@@ -1,0 +1,9 @@
+name = "moonlander-scores"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "SCORES"
+# Replace with your KV namespace ID after running:
+#   wrangler kv:namespace create SCORES
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"

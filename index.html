@@ -13,6 +13,37 @@
 <body>
 <canvas id="c"></canvas>
 <button id="tiltBtn" style="display:none;position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#4488ff;color:#fff;border:none;border-radius:8px;padding:14px 28px;font-size:18px;font-family:monospace;z-index:10;cursor:pointer;">📱 ENABLE TILT</button>
+
+<!-- Name-entry overlay (mobile) -->
+<div id="nameEntry" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:20;background:rgba(0,0,0,0.85);padding:16px;font-family:monospace;color:#fff;text-align:center;user-select:none;">
+  <div style="font-size:13px;color:#888;margin-bottom:8px;">TAP LETTER TO CHANGE · SWIPE UP/DOWN</div>
+  <div style="display:flex;justify-content:center;gap:8px;margin-bottom:12px;">
+    <div class="init-col" data-idx="0">
+      <button class="init-up">▲</button>
+      <div class="init-letter" style="font-size:40px;font-weight:bold;line-height:1.2;color:#44ff88;">A</div>
+      <button class="init-down">▼</button>
+    </div>
+    <div class="init-col" data-idx="1">
+      <button class="init-up">▲</button>
+      <div class="init-letter" style="font-size:40px;font-weight:bold;line-height:1.2;color:#888;">A</div>
+      <button class="init-down">▼</button>
+    </div>
+    <div class="init-col" data-idx="2">
+      <button class="init-up">▲</button>
+      <div class="init-letter" style="font-size:40px;font-weight:bold;line-height:1.2;color:#888;">A</div>
+      <button class="init-down">▼</button>
+    </div>
+  </div>
+  <button id="nameSubmitBtn" style="background:#44ff88;color:#000;border:none;border-radius:8px;padding:12px 32px;font-size:18px;font-family:monospace;font-weight:bold;cursor:pointer;">SUBMIT SCORE</button>
+</div>
+<style>
+  .init-col { display:flex;flex-direction:column;align-items:center;gap:4px; }
+  .init-up, .init-down {
+    background:#222;color:#fff;border:1px solid #444;border-radius:6px;
+    padding:6px 16px;font-size:20px;font-family:monospace;cursor:pointer;
+    -webkit-tap-highlight-color:transparent;
+  }
+</style>
 <script>
 // ─── Setup ───────────────────────────────────────────────────────────
 const canvas = document.getElementById('c');
@@ -501,8 +532,126 @@ const BOUNDARY_MARGIN = 0.15; // boundary at 15% beyond screen edges
 const STARTING_LIVES = 3;
 const HIGH_SCORE_STORAGE_KEY = 'moonlander.highScore';
 
+// ─── Global Leaderboard ──────────────────────────────────────────────
+// Set this to your deployed Cloudflare Worker URL after running `wrangler deploy`
+const LEADERBOARD_URL = 'https://moonlander-scores.YOUR_SUBDOMAIN.workers.dev/scores';
+
+let globalLeaderboard = [];       // top-10 fetched from worker
+let leaderboardLoaded = false;    // whether we've fetched at least once
+let leaderboardError = false;     // last fetch failed
+let playerInitials = 'AAA';       // current entry name
+let initialsIndex = 0;            // which letter is being edited (0,1,2)
+let nameSubmitted = false;        // whether score was submitted this session
+let nameSubmitting = false;       // fetch in flight
+
+function fetchLeaderboard() {
+  if (!LEADERBOARD_URL.includes('YOUR_SUBDOMAIN')) {
+    fetch(LEADERBOARD_URL)
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          globalLeaderboard = data;
+          leaderboardLoaded = true;
+          leaderboardError = false;
+        }
+      })
+      .catch(() => { leaderboardError = true; });
+  }
+}
+
+function submitScore(name, sc) {
+  if (!LEADERBOARD_URL.includes('YOUR_SUBDOMAIN') && sc > 0) {
+    nameSubmitting = true;
+    fetch(LEADERBOARD_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, score: sc }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          globalLeaderboard = data;
+          leaderboardLoaded = true;
+          leaderboardError = false;
+        }
+        nameSubmitting = false;
+        nameSubmitted = true;
+        state = 'leaderboard';
+      })
+      .catch(() => {
+        leaderboardError = true;
+        nameSubmitting = false;
+        nameSubmitted = true;
+        state = 'leaderboard';
+      });
+  } else {
+    // Worker not configured — skip to leaderboard view with local data
+    nameSubmitted = true;
+    state = 'leaderboard';
+  }
+}
+
+// Fetch global scores on load so title screen shows them
+fetchLeaderboard();
+
+// ─── Mobile Name-Entry Overlay ────────────────────────────────────────
+const nameEntryDiv = document.getElementById('nameEntry');
+const nameLetterEls = Array.from(document.querySelectorAll('.init-letter'));
+const nameColEls = Array.from(document.querySelectorAll('.init-col'));
+
+function updateNameOverlay() {
+  if (!nameEntryDiv) return;
+  const chars = playerInitials.split('');
+  nameLetterEls.forEach((el, i) => {
+    el.textContent = chars[i];
+    el.style.color = i === initialsIndex ? '#44ff88' : '#888';
+  });
+}
+
+function nameOverlaySetActive(idx) {
+  initialsIndex = idx;
+  updateNameOverlay();
+}
+
+function nameOverlayChangeLetter(idx, delta) {
+  const chars = playerInitials.split('');
+  const c = chars[idx].charCodeAt(0);
+  chars[idx] = String.fromCharCode(((c - 65 + delta + 26) % 26) + 65);
+  playerInitials = chars.join('');
+  initialsIndex = idx;
+  updateNameOverlay();
+}
+
+// Wire up ▲ / ▼ buttons and column taps
+document.querySelectorAll('.init-up').forEach((btn, i) => {
+  btn.addEventListener('click', e => { e.stopPropagation(); nameOverlayChangeLetter(i, 1); });
+});
+document.querySelectorAll('.init-down').forEach((btn, i) => {
+  btn.addEventListener('click', e => { e.stopPropagation(); nameOverlayChangeLetter(i, -1); });
+});
+nameColEls.forEach((col, i) => {
+  col.addEventListener('click', () => nameOverlaySetActive(i));
+});
+
+// Submit button
+const nameSubmitBtn = document.getElementById('nameSubmitBtn');
+nameSubmitBtn && nameSubmitBtn.addEventListener('click', () => {
+  if (!nameSubmitting) submitScore(playerInitials, score);
+});
+
+// Show / hide overlay depending on state (called from render loop via updateNameOverlayVisibility)
+function updateNameOverlayVisibility() {
+  if (!nameEntryDiv) return;
+  const show = state === 'enterName' && (hasTouched || isTouchDevice);
+  nameEntryDiv.style.display = show ? 'block' : 'none';
+  if (show) {
+    updateNameOverlay();
+    if (nameSubmitBtn) nameSubmitBtn.textContent = nameSubmitting ? 'SUBMITTING…' : 'SUBMIT SCORE';
+  }
+}
+
 // ─── Game State ──────────────────────────────────────────────────────
-let state = 'title'; // title, playing, landed, crashed, gameOver
+let state = 'title'; // title, playing, landed, crashed, gameOver, enterName, leaderboard
 let level = 1;
 let score = 0;
 let lives = STARTING_LIVES;
@@ -565,6 +714,46 @@ window.addEventListener('keydown', e => {
   }
   if (state === 'gameOver' && e.code === 'Space') {
     // Return to title
+    stopDeathMarchTheme();
+    state = 'title';
+    lives = STARTING_LIVES;
+    score = 0;
+    level = 1;
+    stars = generateStars();
+    playMarchTheme();
+  }
+
+  // ── Name-entry state: A-Z to change letter, Left/Right to move cursor, Enter/Space to confirm ──
+  if (state === 'enterName') {
+    const chars = playerInitials.split('');
+    if (e.code === 'ArrowRight' || e.code === 'Tab') {
+      e.preventDefault();
+      initialsIndex = (initialsIndex + 1) % 3;
+    } else if (e.code === 'ArrowLeft') {
+      initialsIndex = (initialsIndex + 2) % 3;
+    } else if (e.code === 'ArrowUp') {
+      const c = chars[initialsIndex].charCodeAt(0);
+      chars[initialsIndex] = String.fromCharCode(c < 90 ? c + 1 : 65);
+      playerInitials = chars.join('');
+    } else if (e.code === 'ArrowDown') {
+      const c = chars[initialsIndex].charCodeAt(0);
+      chars[initialsIndex] = String.fromCharCode(c > 65 ? c - 1 : 90);
+      playerInitials = chars.join('');
+    } else if (e.key && e.key.length === 1 && /[A-Za-z]/.test(e.key)) {
+      chars[initialsIndex] = e.key.toUpperCase();
+      playerInitials = chars.join('');
+      if (initialsIndex < 2) initialsIndex++;
+    } else if (e.code === 'Backspace') {
+      if (initialsIndex > 0) initialsIndex--;
+      chars[initialsIndex] = 'A';
+      playerInitials = chars.join('');
+    } else if ((e.code === 'Enter' || e.code === 'Space') && !nameSubmitting) {
+      submitScore(playerInitials, score);
+    }
+  }
+
+  // ── Leaderboard state: any key returns to title ──
+  if (state === 'leaderboard' && (e.code === 'Space' || e.code === 'Enter')) {
     stopDeathMarchTheme();
     state = 'title';
     lives = STARTING_LIVES;
@@ -677,6 +866,17 @@ canvas.addEventListener('touchstart', e => {
     playMarchTheme();
     return;
   }
+  if (state === 'leaderboard') {
+    stopDeathMarchTheme();
+    state = 'title';
+    lives = STARTING_LIVES;
+    score = 0;
+    level = 1;
+    stars = generateStars();
+    playMarchTheme();
+    return;
+  }
+  // enterName: tapping handled by the overlay buttons (see HTML)
 
   // Playing: finger down = thrust
   // Two-finger tap recalibrates tilt baseline
@@ -902,7 +1102,13 @@ function checkLanding() {
     } else {
       lives = Math.max(0, lives - 1);
       if (lives === 0) {
-        state = 'gameOver';
+        syncHighScore();
+        // Route to name entry before game over (reset per-session submission flag)
+        playerInitials = 'AAA';
+        initialsIndex = 0;
+        nameSubmitted = false;
+        nameSubmitting = false;
+        state = score > 0 ? 'enterName' : 'gameOver';
         playDeathMarchTheme();
       } else {
         state = 'crashed';
@@ -1049,14 +1255,15 @@ function render() {
   ctx.fillRect(0, 0, W, H);
 
   if (state === 'title') {
+    updateNameOverlayVisibility();
     drawStarsStatic();
     ctx.globalAlpha = 1;
     drawTitle();
     return;
   }
 
-  if (state === 'gameOver') {
-    // Draw the scene behind the game over screen
+  if (state === 'gameOver' || state === 'enterName' || state === 'leaderboard') {
+    // Draw the scene behind the overlay screen
     drawStars();
     ctx.save();
     const goCx = canvas.width / 2;
@@ -1071,9 +1278,13 @@ function render() {
     // Darken overlay
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    drawGameOver();
+    if (state === 'gameOver') drawGameOver();
+    if (state === 'enterName') drawEnterName();
+    if (state === 'leaderboard') drawLeaderboard();
+    updateNameOverlayVisibility();
     return;
   }
+  updateNameOverlayVisibility();
 
   // Stars (drawn in screen space, not affected by camera)
   drawStars();
@@ -1144,13 +1355,31 @@ function drawTitle() {
     ctx.fillText('Arrow keys or WASD to fly', cx, cy + 20);
   }
   ctx.fillText('Land gently on the pads', cx, cy + 45);
-  ctx.fillText(`High score: ${highScore}`, cx, cy + 70);
+  ctx.fillText(`Local best: ${highScore}`, cx, cy + 70);
+
+  // Global leaderboard top 3
+  if (leaderboardLoaded && globalLeaderboard.length > 0) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = 'bold 13px monospace';
+    ctx.fillText('── GLOBAL TOP 3 ──', cx, cy + 98);
+    const top3 = globalLeaderboard.slice(0, 3);
+    top3.forEach((e, i) => {
+      const medals = ['🥇', '🥈', '🥉'];
+      ctx.fillStyle = i === 0 ? '#ffd700' : i === 1 ? '#c0c0c0' : '#cd7f32';
+      ctx.font = '13px monospace';
+      ctx.fillText(`${medals[i]} ${(e.name || '???').padEnd(4)} ${e.score}`, cx, cy + 116 + i * 18);
+    });
+  } else if (!LEADERBOARD_URL.includes('YOUR_SUBDOMAIN') && !leaderboardLoaded) {
+    ctx.fillStyle = '#444';
+    ctx.font = '12px monospace';
+    ctx.fillText('Loading global scores…', cx, cy + 98);
+  }
 
   ctx.fillStyle = '#44ff88';
   ctx.font = '20px monospace';
   const blink = Math.sin(Date.now() / 400) > 0;
   const prompt = onMobile ? 'TAP TO START' : 'PRESS SPACE TO START';
-  if (blink) ctx.fillText(prompt, cx, cy + 120);
+  if (blink) ctx.fillText(prompt, cx, cy + 175);
 }
 
 function drawBoundary() {
@@ -1454,6 +1683,159 @@ function drawGameOver() {
     ctx.fillStyle = '#ccc';
     ctx.font = '20px monospace';
     ctx.fillText((isTouchDevice || hasTouched) ? 'TAP TO CONTINUE' : 'PRESS SPACE', cx, cy + 130);
+  }
+}
+
+function drawEnterName() {
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const onMobile = isTouchDevice || hasTouched;
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 36px monospace';
+  ctx.fillText('ENTER YOUR NAME', cx, cy - 120);
+
+  ctx.fillStyle = '#888';
+  ctx.font = '18px monospace';
+  ctx.fillText(`Score: ${score}`, cx, cy - 78);
+
+  if (score === highScore && score > 0) {
+    ctx.fillStyle = '#44ff88';
+    ctx.font = '16px monospace';
+    ctx.fillText('NEW LOCAL HIGH SCORE!', cx, cy - 52);
+  }
+
+  if (!onMobile) {
+    // Draw the 3-letter initials selector for keyboard users
+    const chars = playerInitials.split('');
+    const letterSpacing = 60;
+    const startX = cx - letterSpacing;
+
+    for (let i = 0; i < 3; i++) {
+      const lx = startX + i * letterSpacing;
+      const isActive = i === initialsIndex;
+
+      // Box
+      ctx.strokeStyle = isActive ? '#44ff88' : '#444';
+      ctx.lineWidth = isActive ? 3 : 1;
+      const bx = lx - 22, by = cy - 30, bw = 44, bh = 52, br = 6;
+      ctx.beginPath();
+      ctx.moveTo(bx + br, by);
+      ctx.lineTo(bx + bw - br, by);
+      ctx.arcTo(bx + bw, by, bx + bw, by + br, br);
+      ctx.lineTo(bx + bw, by + bh - br);
+      ctx.arcTo(bx + bw, by + bh, bx + bw - br, by + bh, br);
+      ctx.lineTo(bx + br, by + bh);
+      ctx.arcTo(bx, by + bh, bx, by + bh - br, br);
+      ctx.lineTo(bx, by + br);
+      ctx.arcTo(bx, by, bx + br, by, br);
+      ctx.closePath();
+      ctx.stroke();
+
+      // Letter
+      ctx.fillStyle = isActive ? '#44ff88' : '#aaa';
+      ctx.font = `bold ${isActive ? 40 : 34}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(chars[i], lx, cy + 16);
+
+      // Arrow hints
+      if (isActive) {
+        ctx.fillStyle = '#44ff88';
+        ctx.font = '14px monospace';
+        ctx.fillText('▲', lx, cy - 38);
+        ctx.fillText('▼', lx, cy + 36);
+      }
+    }
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#888';
+    ctx.font = '13px monospace';
+    ctx.fillText('LEFT/RIGHT to move · UP/DOWN to change letter', cx, cy + 70);
+
+    const blink = Math.sin(Date.now() / 400) > 0;
+    if (blink && !nameSubmitting) {
+      ctx.fillStyle = '#44ff88';
+      ctx.font = '18px monospace';
+      ctx.fillText('PRESS ENTER to submit', cx, cy + 100);
+    }
+    if (nameSubmitting) {
+      ctx.fillStyle = '#ffcc00';
+      ctx.font = '16px monospace';
+      ctx.fillText('Submitting…', cx, cy + 100);
+    }
+  } else {
+    // Mobile: overlay handles input, just show current initials on canvas too
+    ctx.fillStyle = '#44ff88';
+    ctx.font = 'bold 52px monospace';
+    ctx.fillText(playerInitials, cx, cy + 20);
+    ctx.fillStyle = '#666';
+    ctx.font = '13px monospace';
+    ctx.fillText('(use controls below)', cx, cy + 50);
+  }
+}
+
+function drawLeaderboard() {
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const onMobile = isTouchDevice || hasTouched;
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 32px monospace';
+  ctx.fillText('GLOBAL TOP 10', cx, cy - 180);
+
+  // Show player's score
+  ctx.fillStyle = '#888';
+  ctx.font = '15px monospace';
+  ctx.fillText(`Your score: ${score}  (${playerInitials})`, cx, cy - 148);
+
+  if (leaderboardError) {
+    ctx.fillStyle = '#ff6666';
+    ctx.font = '14px monospace';
+    ctx.fillText('Could not reach leaderboard server', cx, cy - 120);
+  }
+
+  if (!leaderboardLoaded && !leaderboardError) {
+    ctx.fillStyle = '#888';
+    ctx.font = '16px monospace';
+    ctx.fillText('Loading…', cx, cy - 110);
+  }
+
+  // Table header
+  const tableTop = cy - 120;
+  const rowH = 24;
+  ctx.font = '13px monospace';
+  ctx.fillStyle = '#555';
+  ctx.fillText('#    NAME            SCORE       DATE', cx, tableTop);
+
+  // Rows
+  const entries = globalLeaderboard.length > 0 ? globalLeaderboard : [];
+  for (let i = 0; i < Math.min(10, entries.length); i++) {
+    const e = entries[i];
+    const y = tableTop + (i + 1) * rowH;
+    const isPlayer = e.name === playerInitials && e.score === score;
+    ctx.fillStyle = isPlayer ? '#44ff88' : (i < 3 ? '#fff' : '#aaa');
+    ctx.font = `${isPlayer ? 'bold ' : ''}13px monospace`;
+    const rank = String(i + 1).padStart(2, ' ');
+    const name = (e.name || '???').padEnd(4, ' ');
+    const sc = String(e.score).padStart(7, ' ');
+    const dt = (e.date || '').slice(0, 10);
+    ctx.fillText(`${rank}   ${name}   ${sc}   ${dt}`, cx, y);
+  }
+
+  if (entries.length === 0 && leaderboardLoaded) {
+    ctx.fillStyle = '#555';
+    ctx.font = '14px monospace';
+    ctx.fillText('No scores yet — you might be first!', cx, tableTop + rowH);
+  }
+
+  // Prompt
+  const blink = Math.sin(Date.now() / 400) > 0;
+  if (blink) {
+    ctx.fillStyle = '#ccc';
+    ctx.font = '18px monospace';
+    ctx.fillText(onMobile ? 'TAP TO CONTINUE' : 'PRESS SPACE', cx, cy + 155);
   }
 }
 
