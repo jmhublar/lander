@@ -236,7 +236,7 @@ function checkLanding(runtime: GameRuntime, audio: AudioSystem): void {
         ? Math.max(0, runtime.game.attemptPeakSpeed ?? 0)
         : 0;
       runtime.game.status = 'landed';
-      const vBonus = Math.floor((1 - Math.abs(landingVy) / MAX_SAFE_VY) * 50);
+      const vBonus = Math.floor((Math.abs(landingVy) / MAX_SAFE_VY) * 50);
       const aBonus = Math.floor((1 - Math.abs(landingAngle) / MAX_SAFE_ANGLE) * 50);
       const levelBonus = runtime.game.level * 100;
       const baseBonus = levelBonus + vBonus + aBonus;
