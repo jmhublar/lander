@@ -4,6 +4,7 @@ import {
   GRAVITY,
   LANDER_SIZE,
   MAX_SAFE_VX,
+  MAX_SAFE_VY,
   THRUST,
   type GameRuntime,
   type LandingPad,
@@ -104,6 +105,10 @@ function createRuntime(landerOverrides: Partial<Lander> = {}): GameRuntime {
   };
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 describe('getTerrainYAtX', () => {
   it('interpolates terrain points linearly', () => {
     const runtime = createRuntime();
@@ -190,7 +195,102 @@ describe('update fixed-step motion', () => {
 });
 
 describe('update collision outcomes', () => {
-  it('lands when touching a pad with safe velocity and angle', () => {
+  it('deferred/no immediate score commit: touchdown only creates pending landing award', () => {
+    const runtime = createRuntime({
+      x: 150,
+      y: centralPad.y - LANDER_SIZE + 0.1,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+    });
+    runtime.game.attemptPeakSpeed = 0;
+    const audio = createAudioStub();
+
+    update(runtime, audio as unknown as AudioSystem);
+
+    const lander = runtime.game.lander as Lander;
+    expect(runtime.game.status).toBe('landed');
+    expect(lander.y).toBe(centralPad.y - LANDER_SIZE);
+    expect(lander.vx).toBe(0);
+    expect(lander.vy).toBe(0);
+    expect(lander.angle).toBe(0);
+    expect(runtime.game.score).toBe(0);
+    expect(runtime.game.landingScoreAnimation).toBeTruthy();
+    expect(runtime.game.landingScoreAnimation).toMatchObject({
+      displayedAward: 0,
+      elapsedMs: 0,
+      durationMs: 1200,
+      committed: false,
+    });
+    expect(runtime.game.landingScoreAnimation?.baseBonus).toBeGreaterThan(0);
+    expect(runtime.game.landingScoreAnimation?.finalAward).toBe(
+      Math.round(
+        (runtime.game.landingScoreAnimation?.baseBonus ?? 0) *
+          (runtime.game.landingScoreAnimation?.velocityMultiplier ?? 0) *
+          (runtime.game.landingScoreAnimation?.fuelMultiplier ?? 0),
+      ),
+    );
+    expect(runtime.game.particles).toHaveLength(30);
+    expect(audio.playLandingSound).toHaveBeenCalledTimes(1);
+    expect(audio.playExplosionSound).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { attemptPeakSpeed: 0, fuel: 100 },
+    { attemptPeakSpeed: 200, fuel: 1 },
+    { attemptPeakSpeed: 4.5, fuel: 40 },
+    { attemptPeakSpeed: 10_000, fuel: 0.01 },
+    { attemptPeakSpeed: -25, fuel: 300 },
+  ])(
+    'uses deterministic and clamped multipliers (peak=$attemptPeakSpeed fuel=$fuel)',
+    ({ attemptPeakSpeed, fuel }) => {
+      const createLandingRuntime = () =>
+        createRuntime({
+          x: 150,
+          y: centralPad.y - LANDER_SIZE + 0.1,
+          vx: 0,
+          vy: 0,
+          angle: 0,
+          fuel,
+        });
+      const runtime = createLandingRuntime();
+      const runtimeRepeat = createLandingRuntime();
+      runtime.game.attemptPeakSpeed = attemptPeakSpeed;
+      runtimeRepeat.game.attemptPeakSpeed = attemptPeakSpeed;
+      const audio = createAudioStub();
+
+      update(runtime, audio as unknown as AudioSystem);
+      update(runtimeRepeat, audio as unknown as AudioSystem);
+
+      const landingSpeedAtTouchdown = Math.hypot(0, GRAVITY);
+      const trackedPeakSpeed = Math.max(attemptPeakSpeed, landingSpeedAtTouchdown);
+      const safeSpeed = Math.hypot(MAX_SAFE_VX, MAX_SAFE_VY);
+      const expectedVelocityMultiplier = clamp(1.25 - 0.2 * (trackedPeakSpeed / safeSpeed), 0.85, 1.25);
+      const expectedFuelMultiplier = clamp(0.85 + 0.4 * (fuel / 100), 0.85, 1.25);
+
+      expect(runtime.game.landingScoreAnimation).toBeTruthy();
+      expect(runtimeRepeat.game.landingScoreAnimation).toBeTruthy();
+      const animation = runtime.game.landingScoreAnimation;
+      const repeatedAnimation = runtimeRepeat.game.landingScoreAnimation;
+
+      expect(animation?.velocityMultiplier).toBeCloseTo(expectedVelocityMultiplier, 10);
+      expect(animation?.fuelMultiplier).toBeCloseTo(expectedFuelMultiplier, 10);
+      expect(animation?.velocityMultiplier).toBe(repeatedAnimation?.velocityMultiplier);
+      expect(animation?.fuelMultiplier).toBe(repeatedAnimation?.fuelMultiplier);
+      expect(animation?.finalAward).toBe(repeatedAnimation?.finalAward);
+      expect(Number.isFinite(animation?.velocityMultiplier ?? Number.NaN)).toBe(true);
+      expect(Number.isFinite(animation?.fuelMultiplier ?? Number.NaN)).toBe(true);
+      expect(animation?.velocityMultiplier).toBeGreaterThanOrEqual(0.85);
+      expect(animation?.velocityMultiplier).toBeLessThanOrEqual(1.25);
+      expect(animation?.fuelMultiplier).toBeGreaterThanOrEqual(0.85);
+      expect(animation?.fuelMultiplier).toBeLessThanOrEqual(1.25);
+      expect(animation?.finalAward).toBe(
+        Math.round((animation?.baseBonus ?? 0) * (animation?.velocityMultiplier ?? 0) * (animation?.fuelMultiplier ?? 0)),
+      );
+    },
+  );
+
+  it('pending state persists until lifecycle commit', () => {
     const runtime = createRuntime({
       x: 150,
       y: centralPad.y - LANDER_SIZE + 0.1,
@@ -202,16 +302,22 @@ describe('update collision outcomes', () => {
 
     update(runtime, audio as unknown as AudioSystem);
 
-    const lander = runtime.game.lander as Lander;
+    const initialAnimation = runtime.game.landingScoreAnimation;
+    const initialAward = initialAnimation?.finalAward;
+    expect(runtime.game.score).toBe(0);
+    expect(initialAward).toBeGreaterThan(0);
+
+    for (let i = 0; i < 5; i += 1) {
+      update(runtime, audio as unknown as AudioSystem, 1 / 30);
+    }
+
     expect(runtime.game.status).toBe('landed');
-    expect(lander.y).toBe(centralPad.y - LANDER_SIZE);
-    expect(lander.vx).toBe(0);
-    expect(lander.vy).toBe(0);
-    expect(lander.angle).toBe(0);
-    expect(runtime.game.score).toBe(300);
-    expect(runtime.game.particles).toHaveLength(30);
-    expect(audio.playLandingSound).toHaveBeenCalledTimes(1);
-    expect(audio.playExplosionSound).not.toHaveBeenCalled();
+    expect(runtime.game.score).toBe(0);
+    expect(runtime.game.landingScoreAnimation).toBe(initialAnimation);
+    expect(runtime.game.landingScoreAnimation?.finalAward).toBe(initialAward);
+    expect(runtime.game.landingScoreAnimation?.displayedAward).toBe(0);
+    expect(runtime.game.landingScoreAnimation?.elapsedMs).toBe(0);
+    expect(runtime.game.landingScoreAnimation?.committed).toBe(false);
   });
 
   it('crashes when foot is exactly at the 8px pad threshold', () => {
