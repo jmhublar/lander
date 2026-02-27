@@ -195,6 +195,32 @@ describe('update fixed-step motion', () => {
 });
 
 describe('update collision outcomes', () => {
+  it('increases base landing bonus as absolute vertical velocity increases', () => {
+    const createLandingRuntime = (vy: number) =>
+      createRuntime({
+        x: 150,
+        y: centralPad.y - LANDER_SIZE + 0.1,
+        vx: 0,
+        vy,
+        angle: 0,
+        fuel: 100,
+      });
+
+    const lowVyRuntime = createLandingRuntime(0);
+    const highVyRuntime = createLandingRuntime(MAX_SAFE_VY - GRAVITY - 0.001);
+    const audio = createAudioStub();
+
+    update(lowVyRuntime, audio as unknown as AudioSystem);
+    update(highVyRuntime, audio as unknown as AudioSystem);
+
+    const lowBaseBonus = lowVyRuntime.game.landingScoreAnimation?.baseBonus ?? 0;
+    const highBaseBonus = highVyRuntime.game.landingScoreAnimation?.baseBonus ?? 0;
+
+    expect(lowVyRuntime.game.status).toBe('landed');
+    expect(highVyRuntime.game.status).toBe('landed');
+    expect(highBaseBonus).toBeGreaterThan(lowBaseBonus);
+  });
+
   it('deferred/no immediate score commit: touchdown only creates pending landing award', () => {
     const runtime = createRuntime({
       x: 150,
