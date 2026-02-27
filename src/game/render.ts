@@ -352,12 +352,7 @@ function drawMessage(runtime: GameRuntime, text: string, color: string, sub: str
         0,
         9.99,
       );
-      const fuelMultiplier = clampNumber(
-        toFiniteNumber(landingScoreAnimation.fuelMultiplier, 1),
-        0,
-        9.99,
-      );
-      const computedFinalAward = Math.round(baseBonus * velocityMultiplier * fuelMultiplier);
+      const computedFinalAward = Math.round(baseBonus * velocityMultiplier);
       const finalAward = Math.max(
         0,
         Math.round(toFiniteNumber(landingScoreAnimation.finalAward, computedFinalAward)),
@@ -378,16 +373,11 @@ function drawMessage(runtime: GameRuntime, text: string, color: string, sub: str
       ctx.font = '15px monospace';
       ctx.fillText(`Base bonus: ${baseBonus}`, cx, detailTop);
       ctx.fillText(`Velocity multiplier: x${velocityMultiplier.toFixed(2)}`, cx, detailTop + detailGap);
-      ctx.fillText(`Fuel multiplier: x${fuelMultiplier.toFixed(2)}`, cx, detailTop + detailGap * 2);
 
-      const awardY = detailTop + detailGap * 3 + 5;
+      const awardY = detailTop + detailGap * 2 + 5;
       ctx.fillStyle = '#e6e6e6';
       ctx.font = 'bold 20px monospace';
       ctx.fillText(`Award +${displayedAward}`, cx, awardY);
-
-      ctx.fillStyle = '#999';
-      ctx.font = '13px monospace';
-      ctx.fillText(`Projected +${finalAward} (${Math.round(progress * 100)}%)`, cx, awardY + 18);
 
       const barWidth = Math.min(280, Math.max(180, canvas.width * 0.42));
       const barHeight = 8;

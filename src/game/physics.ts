@@ -114,10 +114,6 @@ interface Point {
 const FOOT_HALF_WIDTH = LANDER_SIZE * 0.6;
 const attemptPeakAbsVerticalSpeed = new WeakMap<GameRuntime, number>();
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 function getTrackedPeakAbsVerticalSpeed(runtime: GameRuntime): number {
   const trackedPeakAbsVy = attemptPeakAbsVerticalSpeed.get(runtime);
   if (!Number.isFinite(trackedPeakAbsVy)) {
@@ -243,38 +239,23 @@ function checkLanding(runtime: GameRuntime, audio: AudioSystem): void {
     const safeLanding =
       Math.abs(lander.vy) <= MAX_SAFE_VY &&
       Math.abs(lander.vx) <= MAX_SAFE_VX &&
-      Math.abs(lander.angle) <= MAX_SAFE_ANGLE &&
-      lander.fuel > 0;
+      Math.abs(lander.angle) <= MAX_SAFE_ANGLE;
 
     if (pad && safeLanding) {
       const landingAngle = lander.angle;
-      const landingFuel = lander.fuel;
-      const landingMaxFuel = lander.maxFuel;
       const trackedPeakAbsVy = getTrackedPeakAbsVerticalSpeed(runtime);
-      const trackedPeakSpeed = Number.isFinite(runtime.game.attemptPeakSpeed)
-        ? Math.max(0, runtime.game.attemptPeakSpeed ?? 0)
-        : 0;
       runtime.game.status = 'landed';
       const vBonus = Math.floor((trackedPeakAbsVy / MAX_SAFE_VY) * 50);
       const aBonus = Math.floor((1 - Math.abs(landingAngle) / MAX_SAFE_ANGLE) * 50);
       const levelBonus = runtime.game.level * 100;
       const baseBonus = levelBonus + vBonus + aBonus;
-      const safeSpeed = Math.hypot(MAX_SAFE_VX, MAX_SAFE_VY);
-      const velocityMultiplier = clamp(
-        1.25 - 0.2 * (safeSpeed > 0 ? trackedPeakSpeed / safeSpeed : 0),
-        0.85,
-        1.25,
-      );
-      const fuelMultiplier = clamp(
-        0.85 + 0.4 * (landingMaxFuel > 0 ? landingFuel / landingMaxFuel : 0),
-        0.85,
-        1.25,
-      );
-      const finalAward = Math.round(baseBonus * velocityMultiplier * fuelMultiplier);
+      const multiple = MAX_SAFE_VY > 0 ? trackedPeakAbsVy / MAX_SAFE_VY : 0;
+      const bucket = Math.floor(multiple * 2) / 2;
+      const velocityMultiplier = Math.max(1, Number.isFinite(bucket) ? bucket : 1);
+      const finalAward = Math.round(baseBonus * velocityMultiplier);
       runtime.game.landingScoreAnimation = {
         baseBonus,
         velocityMultiplier,
-        fuelMultiplier,
         finalAward,
         displayedAward: 0,
         elapsedMs: 0,
