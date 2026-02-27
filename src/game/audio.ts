@@ -215,7 +215,7 @@ export class AudioSystem {
 
   private async loadMarchMidiData(): Promise<MarchMidiData | null> {
     try {
-      const response = await fetch('/bluedanub.mid');
+      const response = await fetch(`${import.meta.env.BASE_URL}bluedanub.mid`);
       if (!response.ok) {
         return null;
       }
