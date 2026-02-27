@@ -379,10 +379,6 @@ function drawMessage(runtime: GameRuntime, text: string, color: string, sub: str
       ctx.font = 'bold 20px monospace';
       ctx.fillText(`Award +${displayedAward}`, cx, awardY);
 
-      ctx.fillStyle = '#999';
-      ctx.font = '13px monospace';
-      ctx.fillText(`Projected +${finalAward} (${Math.round(progress * 100)}%)`, cx, awardY + 18);
-
       const barWidth = Math.min(280, Math.max(180, canvas.width * 0.42));
       const barHeight = 8;
       const barX = cx - barWidth / 2;
