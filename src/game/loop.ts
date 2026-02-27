@@ -93,6 +93,7 @@ function fetchLeaderboard(runtime: GameRuntime): void {
 }
 
 function startLevel(runtime: GameRuntime, audio: AudioSystem, lvl: number): void {
+  audio.stopMarchTheme();
   audio.stopDeathMarchTheme();
   runtime.game.level = lvl;
   runtime.game.status = 'playing';
