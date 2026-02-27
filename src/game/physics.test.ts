@@ -105,10 +105,6 @@ function createRuntime(landerOverrides: Partial<Lander> = {}): GameRuntime {
   };
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 describe('getTerrainYAtX', () => {
   it('interpolates terrain points linearly', () => {
     const runtime = createRuntime();
@@ -296,8 +292,7 @@ describe('update collision outcomes', () => {
     expect(runtime.game.landingScoreAnimation?.finalAward).toBe(
       Math.round(
         (runtime.game.landingScoreAnimation?.baseBonus ?? 0) *
-          (runtime.game.landingScoreAnimation?.velocityMultiplier ?? 0) *
-          (runtime.game.landingScoreAnimation?.fuelMultiplier ?? 0),
+          (runtime.game.landingScoreAnimation?.velocityMultiplier ?? 0),
       ),
     );
     expect(runtime.game.particles).toHaveLength(30);
@@ -306,59 +301,76 @@ describe('update collision outcomes', () => {
   });
 
   it.each([
-    { attemptPeakSpeed: 0, fuel: 100 },
-    { attemptPeakSpeed: 200, fuel: 1 },
-    { attemptPeakSpeed: 4.5, fuel: 40 },
-    { attemptPeakSpeed: 10_000, fuel: 0.01 },
-    { attemptPeakSpeed: -25, fuel: 300 },
-  ])(
-    'uses deterministic and clamped multipliers (peak=$attemptPeakSpeed fuel=$fuel)',
-    ({ attemptPeakSpeed, fuel }) => {
-      const createLandingRuntime = () =>
-        createRuntime({
-          x: 150,
-          y: centralPad.y - LANDER_SIZE + 0.1,
-          vx: 0,
-          vy: 0,
-          angle: 0,
-          fuel,
-        });
-      const runtime = createLandingRuntime();
-      const runtimeRepeat = createLandingRuntime();
-      runtime.game.attemptPeakSpeed = attemptPeakSpeed;
-      runtimeRepeat.game.attemptPeakSpeed = attemptPeakSpeed;
-      const audio = createAudioStub();
+    { preTouchVy: 0, expectedMultiple: 1 },
+    { preTouchVy: MAX_SAFE_VY * 1.2, expectedMultiple: 1 },
+    { preTouchVy: MAX_SAFE_VY * 1.24, expectedMultiple: 1 },
+    { preTouchVy: MAX_SAFE_VY * 1.26, expectedMultiple: 1 },
+    { preTouchVy: MAX_SAFE_VY * 1.5, expectedMultiple: 1.5 },
+    { preTouchVy: MAX_SAFE_VY * 1.74, expectedMultiple: 1.5 },
+    { preTouchVy: MAX_SAFE_VY * 1.76, expectedMultiple: 1.5 },
+    { preTouchVy: MAX_SAFE_VY * 2.01, expectedMultiple: 2 },
+  ])('uses bucketed velocity multiplier from tracked peak abs(vy) (preTouchVy=$preTouchVy)', ({
+    preTouchVy,
+    expectedMultiple,
+  }) => {
+    const createLandingRuntime = () =>
+      createRuntime({
+        x: 150,
+        y: centralPad.y - LANDER_SIZE + 0.1,
+        vx: 0,
+        vy: 0,
+        angle: 0,
+      });
+    const runtime = createLandingRuntime();
+    const runtimeRepeat = createLandingRuntime();
+    const audio = createAudioStub();
 
-      update(runtime, audio as unknown as AudioSystem);
-      update(runtimeRepeat, audio as unknown as AudioSystem);
+    runtime.game.lander = {
+      ...(runtime.game.lander as Lander),
+      y: 20,
+      vy: preTouchVy - GRAVITY,
+    };
+    runtimeRepeat.game.lander = {
+      ...(runtimeRepeat.game.lander as Lander),
+      y: 20,
+      vy: preTouchVy - GRAVITY,
+    };
 
-      const landingSpeedAtTouchdown = Math.hypot(0, GRAVITY);
-      const trackedPeakSpeed = Math.max(attemptPeakSpeed, landingSpeedAtTouchdown);
-      const safeSpeed = Math.hypot(MAX_SAFE_VX, MAX_SAFE_VY);
-      const expectedVelocityMultiplier = clamp(1.25 - 0.2 * (trackedPeakSpeed / safeSpeed), 0.85, 1.25);
-      const expectedFuelMultiplier = clamp(0.85 + 0.4 * (fuel / 100), 0.85, 1.25);
+    update(runtime, audio as unknown as AudioSystem);
+    update(runtimeRepeat, audio as unknown as AudioSystem);
 
-      expect(runtime.game.landingScoreAnimation).toBeTruthy();
-      expect(runtimeRepeat.game.landingScoreAnimation).toBeTruthy();
-      const animation = runtime.game.landingScoreAnimation;
-      const repeatedAnimation = runtimeRepeat.game.landingScoreAnimation;
+    runtime.game.lander = {
+      ...(runtime.game.lander as Lander),
+      y: centralPad.y - LANDER_SIZE + 0.1,
+      vy: 0,
+    };
+    runtimeRepeat.game.lander = {
+      ...(runtimeRepeat.game.lander as Lander),
+      y: centralPad.y - LANDER_SIZE + 0.1,
+      vy: 0,
+    };
 
-      expect(animation?.velocityMultiplier).toBeCloseTo(expectedVelocityMultiplier, 10);
-      expect(animation?.fuelMultiplier).toBeCloseTo(expectedFuelMultiplier, 10);
-      expect(animation?.velocityMultiplier).toBe(repeatedAnimation?.velocityMultiplier);
-      expect(animation?.fuelMultiplier).toBe(repeatedAnimation?.fuelMultiplier);
-      expect(animation?.finalAward).toBe(repeatedAnimation?.finalAward);
-      expect(Number.isFinite(animation?.velocityMultiplier ?? Number.NaN)).toBe(true);
-      expect(Number.isFinite(animation?.fuelMultiplier ?? Number.NaN)).toBe(true);
-      expect(animation?.velocityMultiplier).toBeGreaterThanOrEqual(0.85);
-      expect(animation?.velocityMultiplier).toBeLessThanOrEqual(1.25);
-      expect(animation?.fuelMultiplier).toBeGreaterThanOrEqual(0.85);
-      expect(animation?.fuelMultiplier).toBeLessThanOrEqual(1.25);
-      expect(animation?.finalAward).toBe(
-        Math.round((animation?.baseBonus ?? 0) * (animation?.velocityMultiplier ?? 0) * (animation?.fuelMultiplier ?? 0)),
-      );
-    },
-  );
+    update(runtime, audio as unknown as AudioSystem);
+    update(runtimeRepeat, audio as unknown as AudioSystem);
+
+    expect(runtime.game.landingScoreAnimation).toBeTruthy();
+    expect(runtimeRepeat.game.landingScoreAnimation).toBeTruthy();
+    const animation = runtime.game.landingScoreAnimation;
+    const repeatedAnimation = runtimeRepeat.game.landingScoreAnimation;
+    const trackedPeakAbsVy = Math.max(preTouchVy, GRAVITY);
+    const multiple = trackedPeakAbsVy / MAX_SAFE_VY;
+    const expectedBucket = Math.floor(multiple * 2) / 2;
+    const expectedVelocityMultiplier = Math.max(1, expectedBucket);
+
+    expect(expectedVelocityMultiplier).toBe(expectedMultiple);
+    expect(animation?.velocityMultiplier).toBe(expectedVelocityMultiplier);
+    expect(animation?.velocityMultiplier).toBeGreaterThanOrEqual(1);
+    expect(animation?.velocityMultiplier).toBe(repeatedAnimation?.velocityMultiplier);
+    expect(animation?.finalAward).toBe(repeatedAnimation?.finalAward);
+    expect(animation?.finalAward).toBe(
+      Math.round((animation?.baseBonus ?? 0) * (animation?.velocityMultiplier ?? 0)),
+    );
+  });
 
   it('pending state persists until lifecycle commit', () => {
     const runtime = createRuntime({

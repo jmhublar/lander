@@ -123,7 +123,7 @@ describe('fuel mechanic', () => {
     expect(audio.updateThrustSound).toHaveBeenCalledWith(false);
   });
 
-  it('prevents successful landing with empty fuel', () => {
+  it('allows successful landing with empty fuel', () => {
     const runtime = createRuntime({
       x: 150,
       y: 120 - 14 + 0.1,
@@ -138,9 +138,9 @@ describe('fuel mechanic', () => {
 
     update(runtime, audio as unknown as AudioSystem);
 
-    expect(runtime.game.status).toBe('crashed');
-    expect(runtime.game.lives).toBe(1);
-    expect(audio.playExplosionSound).toHaveBeenCalledTimes(1);
-    expect(audio.playLandingSound).not.toHaveBeenCalled();
+    expect(runtime.game.status).toBe('landed');
+    expect(runtime.game.lives).toBe(2);
+    expect(audio.playExplosionSound).not.toHaveBeenCalled();
+    expect(audio.playLandingSound).toHaveBeenCalledTimes(1);
   });
 });

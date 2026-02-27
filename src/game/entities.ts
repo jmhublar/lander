@@ -95,7 +95,6 @@ export interface LeaderboardState {
 export interface LandingScoreAnimation {
   baseBonus: number;
   velocityMultiplier: number;
-  fuelMultiplier: number;
   finalAward: number;
   displayedAward: number;
   elapsedMs: number;
