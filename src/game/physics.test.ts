@@ -195,6 +195,50 @@ describe('update fixed-step motion', () => {
 });
 
 describe('update collision outcomes', () => {
+  it('uses attempt peak abs(vy) for vertical bonus instead of touchdown abs(vy)', () => {
+    const createLandingRuntime = () =>
+      createRuntime({
+        x: 150,
+        y: centralPad.y - LANDER_SIZE + 0.1,
+        vx: 0,
+        vy: 0,
+        angle: 0,
+        fuel: 100,
+      });
+
+    const controlRuntime = createLandingRuntime();
+    const peakedRuntime = createLandingRuntime();
+    const audio = createAudioStub();
+
+    peakedRuntime.game.lander = {
+      ...(peakedRuntime.game.lander as Lander),
+      y: 20,
+      vy: MAX_SAFE_VY - GRAVITY - 0.001,
+    };
+    update(peakedRuntime, audio as unknown as AudioSystem);
+
+    controlRuntime.game.lander = {
+      ...(controlRuntime.game.lander as Lander),
+      y: centralPad.y - LANDER_SIZE + 0.1,
+      vy: 0,
+    };
+    peakedRuntime.game.lander = {
+      ...(peakedRuntime.game.lander as Lander),
+      y: centralPad.y - LANDER_SIZE + 0.1,
+      vy: 0,
+    };
+
+    update(controlRuntime, audio as unknown as AudioSystem);
+    update(peakedRuntime, audio as unknown as AudioSystem);
+
+    const controlBaseBonus = controlRuntime.game.landingScoreAnimation?.baseBonus ?? 0;
+    const peakedBaseBonus = peakedRuntime.game.landingScoreAnimation?.baseBonus ?? 0;
+
+    expect(controlRuntime.game.status).toBe('landed');
+    expect(peakedRuntime.game.status).toBe('landed');
+    expect(peakedBaseBonus).toBeGreaterThan(controlBaseBonus);
+  });
+
   it('increases base landing bonus as absolute vertical velocity increases', () => {
     const createLandingRuntime = (vy: number) =>
       createRuntime({

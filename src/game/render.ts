@@ -9,6 +9,8 @@ import {
 } from './entities';
 import { getTerrainYAtX } from './physics';
 
+declare const __APP_VERSION__: string;
+
 interface TerrainRenderBounds {
   minX: number;
   maxX: number;
@@ -308,6 +310,11 @@ function drawHUD(runtime: GameRuntime): void {
       ctx.fill();
     }
   }
+
+  ctx.textAlign = 'right';
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#666';
+  ctx.fillText(`v${__APP_VERSION__}`, canvas.width - margin, canvas.height - margin);
 }
 
 function clampNumber(value: number, min: number, max: number): number {
