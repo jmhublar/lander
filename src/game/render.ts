@@ -5,6 +5,7 @@ import {
   MAX_SAFE_VY,
   mulberry32,
   type GameRuntime,
+  type LandingScoreAnimation,
 } from './entities';
 import { getTerrainYAtX } from './physics';
 
@@ -309,10 +310,19 @@ function drawHUD(runtime: GameRuntime): void {
   }
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function toFiniteNumber(value: number | null | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 function drawMessage(runtime: GameRuntime, text: string, color: string, sub: string): void {
   const { ctx, canvas, game } = runtime;
   const cx = canvas.width / 2;
   const cy = canvas.height / 2;
+  let promptY = cy + 50;
   ctx.textAlign = 'center';
   ctx.font = 'bold 40px monospace';
   ctx.fillStyle = color;
@@ -320,12 +330,77 @@ function drawMessage(runtime: GameRuntime, text: string, color: string, sub: str
   ctx.font = '16px monospace';
   ctx.fillStyle = '#888';
   if (game.status === 'landed') {
-    ctx.fillText(`Level bonus: ${game.level * 100}`, cx, cy + 15);
+    const landingScoreAnimation: LandingScoreAnimation | null | undefined = game.landingScoreAnimation;
+
+    if (!landingScoreAnimation) {
+      ctx.fillText(`Level bonus: ${game.level * 100}`, cx, cy + 15);
+    } else {
+      const fallbackBaseBonus = Math.max(0, game.level * 100);
+      const baseBonus = Math.max(
+        0,
+        Math.round(toFiniteNumber(landingScoreAnimation.baseBonus, fallbackBaseBonus)),
+      );
+      const velocityMultiplier = clampNumber(
+        toFiniteNumber(landingScoreAnimation.velocityMultiplier, 1),
+        0,
+        9.99,
+      );
+      const fuelMultiplier = clampNumber(
+        toFiniteNumber(landingScoreAnimation.fuelMultiplier, 1),
+        0,
+        9.99,
+      );
+      const computedFinalAward = Math.round(baseBonus * velocityMultiplier * fuelMultiplier);
+      const finalAward = Math.max(
+        0,
+        Math.round(toFiniteNumber(landingScoreAnimation.finalAward, computedFinalAward)),
+      );
+      const displayedAward = clampNumber(
+        Math.round(toFiniteNumber(landingScoreAnimation.displayedAward, finalAward)),
+        0,
+        finalAward,
+      );
+      const durationMs = Math.max(1, toFiniteNumber(landingScoreAnimation.durationMs, 1200));
+      const elapsedMs = clampNumber(toFiniteNumber(landingScoreAnimation.elapsedMs, 0), 0, durationMs);
+      const timelineProgress = elapsedMs / durationMs;
+      const awardProgress = finalAward > 0 ? displayedAward / finalAward : timelineProgress;
+      const progress = clampNumber(awardProgress, 0, 1);
+
+      const detailTop = cy + 2;
+      const detailGap = 17;
+      ctx.font = '15px monospace';
+      ctx.fillText(`Base bonus: ${baseBonus}`, cx, detailTop);
+      ctx.fillText(`Velocity multiplier: x${velocityMultiplier.toFixed(2)}`, cx, detailTop + detailGap);
+      ctx.fillText(`Fuel multiplier: x${fuelMultiplier.toFixed(2)}`, cx, detailTop + detailGap * 2);
+
+      const awardY = detailTop + detailGap * 3 + 5;
+      ctx.fillStyle = '#e6e6e6';
+      ctx.font = 'bold 20px monospace';
+      ctx.fillText(`Award +${displayedAward}`, cx, awardY);
+
+      ctx.fillStyle = '#999';
+      ctx.font = '13px monospace';
+      ctx.fillText(`Projected +${finalAward} (${Math.round(progress * 100)}%)`, cx, awardY + 18);
+
+      const barWidth = Math.min(280, Math.max(180, canvas.width * 0.42));
+      const barHeight = 8;
+      const barX = cx - barWidth / 2;
+      const barY = awardY + 30;
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(barX, barY, barWidth, barHeight);
+      ctx.fillStyle = '#44ff88';
+      ctx.fillRect(barX, barY, barWidth * progress, barHeight);
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(barX, barY, barWidth, barHeight);
+      ctx.fillStyle = '#888';
+      promptY = barY + 28;
+    }
   }
   const blink = Math.sin(Date.now() / 400) > 0;
   if (blink) {
     ctx.fillStyle = '#ccc';
-    ctx.fillText(sub, cx, cy + 50);
+    ctx.fillText(sub, cx, promptY);
   }
 }
 

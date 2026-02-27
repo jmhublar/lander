@@ -113,6 +113,10 @@ interface Point {
 
 const FOOT_HALF_WIDTH = LANDER_SIZE * 0.6;
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 function getLanderFootprint(lander: Lander): [Point, Point] {
   const cos = Math.cos(lander.angle);
   const sin = Math.sin(lander.angle);
@@ -224,21 +228,51 @@ function checkLanding(runtime: GameRuntime, audio: AudioSystem): void {
       lander.fuel > 0;
 
     if (pad && safeLanding) {
+      const landingVy = lander.vy;
+      const landingAngle = lander.angle;
+      const landingFuel = lander.fuel;
+      const landingMaxFuel = lander.maxFuel;
+      const trackedPeakSpeed = Number.isFinite(runtime.game.attemptPeakSpeed)
+        ? Math.max(0, runtime.game.attemptPeakSpeed ?? 0)
+        : 0;
       runtime.game.status = 'landed';
+      const vBonus = Math.floor((1 - Math.abs(landingVy) / MAX_SAFE_VY) * 50);
+      const aBonus = Math.floor((1 - Math.abs(landingAngle) / MAX_SAFE_ANGLE) * 50);
+      const levelBonus = runtime.game.level * 100;
+      const baseBonus = levelBonus + vBonus + aBonus;
+      const safeSpeed = Math.hypot(MAX_SAFE_VX, MAX_SAFE_VY);
+      const velocityMultiplier = clamp(
+        1.25 - 0.2 * (safeSpeed > 0 ? trackedPeakSpeed / safeSpeed : 0),
+        0.85,
+        1.25,
+      );
+      const fuelMultiplier = clamp(
+        0.85 + 0.4 * (landingMaxFuel > 0 ? landingFuel / landingMaxFuel : 0),
+        0.85,
+        1.25,
+      );
+      const finalAward = Math.round(baseBonus * velocityMultiplier * fuelMultiplier);
+      runtime.game.landingScoreAnimation = {
+        baseBonus,
+        velocityMultiplier,
+        fuelMultiplier,
+        finalAward,
+        displayedAward: 0,
+        elapsedMs: 0,
+        durationMs: 1200,
+        committed: false,
+      };
+      runtime.game.attemptPeakSpeed = 0;
       lander.y = pad.y - LANDER_SIZE;
       lander.vx = 0;
       lander.vy = 0;
       lander.angle = 0;
-      const vBonus = Math.floor((1 - Math.abs(lander.vy) / MAX_SAFE_VY) * 50);
-      const aBonus = Math.floor((1 - Math.abs(lander.angle) / MAX_SAFE_ANGLE) * 50);
-      const levelBonus = runtime.game.level * 100;
-      runtime.game.score += levelBonus + vBonus + aBonus;
-      syncHighScore(runtime);
       spawnLandingParticles(runtime, lander.x, pad.y);
       audio.updateThrustSound(false);
       audio.playLandingSound();
     } else {
       runtime.game.lives = Math.max(0, runtime.game.lives - 1);
+      runtime.game.attemptPeakSpeed = 0;
       if (runtime.game.lives === 0) {
         syncHighScore(runtime);
         runtime.leaderboard.playerInitials = 'AAA';
@@ -320,6 +354,7 @@ export function update(runtime: GameRuntime, audio: AudioSystem, dt = 1 / 60): v
   const frameScale = Math.min(dt, 0.1) * 60;
 
   if (runtime.game.status !== 'playing') {
+    runtime.game.attemptPeakSpeed = 0;
     if (runtime.game.status === 'gameOver' && !audio.isDeathMarchPlaying()) {
       audio.playDeathMarchTheme();
     }
@@ -361,6 +396,14 @@ export function update(runtime: GameRuntime, audio: AudioSystem, dt = 1 / 60): v
     const ey = lander.y + Math.cos(lander.angle) * LANDER_SIZE;
     spawnThrustParticles(runtime, ex, ey, lander.angle);
   }
+
+  const priorPeakSpeed = Number.isFinite(runtime.game.attemptPeakSpeed)
+    ? Math.max(0, runtime.game.attemptPeakSpeed ?? 0)
+    : 0;
+  const currentSpeed = Math.hypot(lander.vx, lander.vy);
+  runtime.game.attemptPeakSpeed = Number.isFinite(currentSpeed)
+    ? Math.max(priorPeakSpeed, currentSpeed)
+    : priorPeakSpeed;
 
   lander.x += lander.vx * frameScale;
   lander.y += lander.vy * frameScale;

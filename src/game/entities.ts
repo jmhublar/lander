@@ -92,6 +92,17 @@ export interface LeaderboardState {
   nameSubmitting: boolean;
 }
 
+export interface LandingScoreAnimation {
+  baseBonus: number;
+  velocityMultiplier: number;
+  fuelMultiplier: number;
+  finalAward: number;
+  displayedAward: number;
+  elapsedMs: number;
+  durationMs: number;
+  committed: boolean;
+}
+
 export interface GameState {
   status: GameStatus;
   level: number;
@@ -103,6 +114,8 @@ export interface GameState {
   landingPads: LandingPad[];
   stars: Star[];
   particles: Particle[];
+  attemptPeakSpeed?: number;
+  landingScoreAnimation?: LandingScoreAnimation | null;
   camera: Camera;
 }
 
@@ -180,6 +193,8 @@ export function createRuntime(
       landingPads: [],
       stars: [],
       particles: [],
+      attemptPeakSpeed: 0,
+      landingScoreAnimation: null,
       camera: { x: 0, y: 0, zoom: 1, targetZoom: 1 },
     },
     leaderboardUrl: LEADERBOARD_URL,

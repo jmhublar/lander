@@ -5,6 +5,7 @@ import {
   createRuntime,
   generateStars,
   generateTerrain,
+  syncHighScore,
   type GameRuntime,
   type OverlayRefs,
 } from './entities';
@@ -92,6 +93,11 @@ function fetchLeaderboard(runtime: GameRuntime): void {
   }
 }
 
+function resetAttemptScopedState(runtime: GameRuntime): void {
+  runtime.game.attemptPeakSpeed = 0;
+  runtime.game.landingScoreAnimation = null;
+}
+
 function startLevel(runtime: GameRuntime, audio: AudioSystem, lvl: number): void {
   audio.stopMarchTheme();
   audio.stopDeathMarchTheme();
@@ -102,6 +108,7 @@ function startLevel(runtime: GameRuntime, audio: AudioSystem, lvl: number): void
   runtime.game.landingPads = terrainData.landingPads;
   runtime.game.stars = generateStars(runtime.canvas);
   runtime.game.particles = [];
+  resetAttemptScopedState(runtime);
   runtime.game.lander = {
     x: runtime.canvas.width / 2,
     y: 60,
@@ -122,8 +129,43 @@ function beginTitle(runtime: GameRuntime, audio: AudioSystem): void {
   runtime.game.lives = STARTING_LIVES;
   runtime.game.score = 0;
   runtime.game.level = 1;
+  resetAttemptScopedState(runtime);
   runtime.game.stars = generateStars(runtime.canvas);
   audio.playMarchTheme();
+}
+
+function commitLandingAwardIfPending(runtime: GameRuntime): void {
+  const animation = runtime.game.landingScoreAnimation;
+  if (!animation || animation.committed) {
+    return;
+  }
+
+  runtime.game.score += animation.finalAward;
+  syncHighScore(runtime);
+  animation.committed = true;
+  animation.displayedAward = animation.finalAward;
+}
+
+function updateLandingScoreAnimation(runtime: GameRuntime, dt: number): void {
+  if (runtime.game.status !== 'landed') {
+    return;
+  }
+
+  const animation = runtime.game.landingScoreAnimation;
+  if (!animation) {
+    return;
+  }
+
+  const durationMs = animation.durationMs > 0 ? animation.durationMs : 1200;
+  animation.elapsedMs = Math.min(durationMs, animation.elapsedMs + dt * 1000);
+
+  const progress = Math.min(1, animation.elapsedMs / durationMs);
+  const easedProgress = 1 - (1 - progress) ** 3;
+  animation.displayedAward = Math.round(animation.finalAward * easedProgress);
+
+  if (animation.elapsedMs >= durationMs) {
+    commitLandingAwardIfPending(runtime);
+  }
 }
 
 function handleNameEntryKey(runtime: GameRuntime, event: KeyboardEvent): void {
@@ -175,6 +217,9 @@ export function handleKeyDown(runtime: GameRuntime, audio: AudioSystem, event: K
     startLevel(runtime, audio, 1);
   }
   if ((runtime.game.status === 'landed' || runtime.game.status === 'crashed') && event.code === 'Space') {
+    if (runtime.game.status === 'landed') {
+      commitLandingAwardIfPending(runtime);
+    }
     startLevel(runtime, audio, runtime.game.status === 'landed' ? runtime.game.level + 1 : runtime.game.level);
   }
   if (runtime.game.status === 'gameOver' && event.code === 'Space') {
@@ -287,17 +332,21 @@ export function startGame(canvas: HTMLCanvasElement): () => void {
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
   const onWindowClick = () => {
-    if (runtime.game.status !== 'title') {
+    if (runtime.game.status === 'title') {
+      audio.initAudio();
+      audio.onTitleInteraction(runtime);
+      audio.stopDeathMarchTheme();
+      audio.playStartJingle();
+      runtime.game.lives = STARTING_LIVES;
+      runtime.game.score = 0;
+      startLevel(runtime, audio, 1);
       return;
     }
 
-    audio.initAudio();
-    audio.onTitleInteraction(runtime);
-    audio.stopDeathMarchTheme();
-    audio.playStartJingle();
-    runtime.game.lives = STARTING_LIVES;
-    runtime.game.score = 0;
-    startLevel(runtime, audio, 1);
+    if (runtime.game.status === 'landed') {
+      commitLandingAwardIfPending(runtime);
+      startLevel(runtime, audio, runtime.game.level + 1);
+    }
   };
 
   window.addEventListener('click', onWindowClick);
@@ -342,6 +391,7 @@ export function startGame(canvas: HTMLCanvasElement): () => void {
       return;
     }
     if (runtime.game.status === 'landed') {
+      commitLandingAwardIfPending(runtime);
       startLevel(runtime, audio, runtime.game.level + 1);
       return;
     }
@@ -383,6 +433,7 @@ export function startGame(canvas: HTMLCanvasElement): () => void {
     previousFrameTime = frameTime;
 
     update(runtime, audio, dt);
+    updateLandingScoreAnimation(runtime, dt);
     render(runtime);
     rafId = window.requestAnimationFrame(loop);
   };
