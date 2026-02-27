@@ -167,11 +167,6 @@ export function handleKeyDown(runtime: GameRuntime, audio: AudioSystem, event: K
   audio.onTitleInteraction(runtime);
 
   if (runtime.game.status === 'title' && event.code === 'Space') {
-    const startOverlay = document.getElementById('startOverlay');
-    if (startOverlay) {
-      return;
-    }
-    audio.stopMarchTheme();
     audio.stopDeathMarchTheme();
     audio.playStartJingle();
     runtime.game.lives = STARTING_LIVES;
@@ -290,16 +285,18 @@ export function startGame(canvas: HTMLCanvasElement): () => void {
 
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
-  const onWindowClick = (event: MouseEvent) => {
-    const overlay = document.getElementById('startOverlay');
-    const target = event.target;
-
-    if (!(target instanceof Node) || !overlay || !overlay.contains(target)) {
+  const onWindowClick = () => {
+    if (runtime.game.status !== 'title') {
       return;
     }
 
     audio.initAudio();
     audio.onTitleInteraction(runtime);
+    audio.stopDeathMarchTheme();
+    audio.playStartJingle();
+    runtime.game.lives = STARTING_LIVES;
+    runtime.game.score = 0;
+    startLevel(runtime, audio, 1);
   };
 
   window.addEventListener('click', onWindowClick);

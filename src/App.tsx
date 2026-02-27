@@ -1,10 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { startGame } from './game/loop';
-import { useState } from 'react';
 
 const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [started, setStarted] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -14,50 +12,10 @@ const App: React.FC = () => {
     return startGame(canvas);
   }, []);
 
-  useEffect(() => {
-    if (started) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code === 'Space') {
-        setStarted(true);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [started]);
-
   return (
     <div style={{ width: '100vw', height: '100vh', margin: 0, padding: 0, position: 'relative', backgroundColor: '#000' }}>
 
       <canvas id="c" ref={canvasRef} width={800} height={600} style={{ position: 'absolute', top: 0, left: 0, zIndex: 1, pointerEvents: 'auto' }} />
-      {!started && (
-        <button
-          id="startOverlay"
-          type="button"
-          onClick={() => setStarted(true)}
-          style={{
-            position: 'absolute',
-            bottom: '20px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 50,
-            backgroundColor: 'transparent',
-            color: '#44ff88',
-            fontFamily: 'monospace',
-            fontSize: '24px',
-            cursor: 'pointer',
-            userSelect: 'none',
-            border: '2px solid #44ff88',
-            borderRadius: '8px',
-            padding: '16px 32px',
-          }}
-        >
-          CLICK TO START
-        </button>
-      )}
       <button
         id="tiltBtn"
         type="button"
