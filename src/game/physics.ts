@@ -112,9 +112,28 @@ interface Point {
 }
 
 const FOOT_HALF_WIDTH = LANDER_SIZE * 0.6;
+const attemptPeakAbsVerticalSpeed = new WeakMap<GameRuntime, number>();
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function getTrackedPeakAbsVerticalSpeed(runtime: GameRuntime): number {
+  const trackedPeakAbsVy = attemptPeakAbsVerticalSpeed.get(runtime);
+  if (!Number.isFinite(trackedPeakAbsVy)) {
+    return 0;
+  }
+  return Math.max(0, trackedPeakAbsVy ?? 0);
+}
+
+function resetTrackedPeakAbsVerticalSpeed(runtime: GameRuntime): void {
+  attemptPeakAbsVerticalSpeed.set(runtime, 0);
+}
+
+function trackPeakAbsVerticalSpeed(runtime: GameRuntime, vy: number): void {
+  const priorPeakAbsVy = getTrackedPeakAbsVerticalSpeed(runtime);
+  const currentAbsVy = Math.abs(vy);
+  attemptPeakAbsVerticalSpeed.set(runtime, Number.isFinite(currentAbsVy) ? Math.max(priorPeakAbsVy, currentAbsVy) : priorPeakAbsVy);
 }
 
 function getLanderFootprint(lander: Lander): [Point, Point] {
@@ -228,15 +247,15 @@ function checkLanding(runtime: GameRuntime, audio: AudioSystem): void {
       lander.fuel > 0;
 
     if (pad && safeLanding) {
-      const landingVy = lander.vy;
       const landingAngle = lander.angle;
       const landingFuel = lander.fuel;
       const landingMaxFuel = lander.maxFuel;
+      const trackedPeakAbsVy = getTrackedPeakAbsVerticalSpeed(runtime);
       const trackedPeakSpeed = Number.isFinite(runtime.game.attemptPeakSpeed)
         ? Math.max(0, runtime.game.attemptPeakSpeed ?? 0)
         : 0;
       runtime.game.status = 'landed';
-      const vBonus = Math.floor((Math.abs(landingVy) / MAX_SAFE_VY) * 50);
+      const vBonus = Math.floor((trackedPeakAbsVy / MAX_SAFE_VY) * 50);
       const aBonus = Math.floor((1 - Math.abs(landingAngle) / MAX_SAFE_ANGLE) * 50);
       const levelBonus = runtime.game.level * 100;
       const baseBonus = levelBonus + vBonus + aBonus;
@@ -263,6 +282,7 @@ function checkLanding(runtime: GameRuntime, audio: AudioSystem): void {
         committed: false,
       };
       runtime.game.attemptPeakSpeed = 0;
+      resetTrackedPeakAbsVerticalSpeed(runtime);
       lander.y = pad.y - LANDER_SIZE;
       lander.vx = 0;
       lander.vy = 0;
@@ -273,6 +293,7 @@ function checkLanding(runtime: GameRuntime, audio: AudioSystem): void {
     } else {
       runtime.game.lives = Math.max(0, runtime.game.lives - 1);
       runtime.game.attemptPeakSpeed = 0;
+      resetTrackedPeakAbsVerticalSpeed(runtime);
       if (runtime.game.lives === 0) {
         syncHighScore(runtime);
         runtime.leaderboard.playerInitials = 'AAA';
@@ -355,6 +376,7 @@ export function update(runtime: GameRuntime, audio: AudioSystem, dt = 1 / 60): v
 
   if (runtime.game.status !== 'playing') {
     runtime.game.attemptPeakSpeed = 0;
+    resetTrackedPeakAbsVerticalSpeed(runtime);
     if (runtime.game.status === 'gameOver' && !audio.isDeathMarchPlaying()) {
       audio.playDeathMarchTheme();
     }
@@ -404,6 +426,7 @@ export function update(runtime: GameRuntime, audio: AudioSystem, dt = 1 / 60): v
   runtime.game.attemptPeakSpeed = Number.isFinite(currentSpeed)
     ? Math.max(priorPeakSpeed, currentSpeed)
     : priorPeakSpeed;
+  trackPeakAbsVerticalSpeed(runtime, lander.vy);
 
   lander.x += lander.vx * frameScale;
   lander.y += lander.vy * frameScale;
