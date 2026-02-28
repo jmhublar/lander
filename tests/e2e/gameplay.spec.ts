@@ -89,7 +89,6 @@ async function forceSafeLandingState(page: Page): Promise<void> {
       { x: 1400, y: 300 },
     ];
     runtime.game.landingPads = [{ x1: 350, x2: 450, y: 300, cx: 400 }];
-    runtime.game.particles = [];
     runtime.game.lander = {
       x: 400,
       y: 286,
@@ -149,6 +148,57 @@ async function forceCrashTransition(page: Page): Promise<void> {
       angle: 1.2,
       thrusting: false,
       outOfBounds: true,
+      fuel: 100,
+      maxFuel: 100,
+    };
+  });
+}
+
+async function forceNearSurfaceThrustState(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const runtime = (window as Window & {
+      __LANDER_TEST_API__?: {
+        getRuntime: () => {
+          game: {
+            status: string;
+            terrain: Array<{ x: number; y: number }>;
+            landingPads: Array<{ x1: number; x2: number; y: number; cx: number }>;
+            particles: unknown[];
+            lander: {
+              x: number;
+              y: number;
+              vx: number;
+              vy: number;
+              angle: number;
+              thrusting: boolean;
+              outOfBounds: boolean;
+              fuel: number;
+              maxFuel: number;
+            };
+          };
+        };
+      };
+    }).__LANDER_TEST_API__?.getRuntime();
+
+    if (!runtime) {
+      return;
+    }
+
+    runtime.game.status = 'playing';
+    runtime.game.terrain = [
+      { x: -400, y: 300 },
+      { x: 1400, y: 300 },
+    ];
+    runtime.game.landingPads = [{ x1: 350, x2: 450, y: 300, cx: 400 }];
+    runtime.game.particles = [];
+    runtime.game.lander = {
+      x: 400,
+      y: 260,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      thrusting: true,
+      outOfBounds: false,
       fuel: 100,
       maxFuel: 100,
     };
@@ -388,4 +438,140 @@ test('landing and collision transitions expose stable status signals', async ({ 
   const crashSnapshot = await getRuntimeSnapshot(page);
   expect(crashSnapshot.status).toBe('crashed');
   expect(crashSnapshot.hasCanvas).toBe(true);
+});
+
+test('near-surface thrust plume remains stable', async ({ page }) => {
+  const runtimeErrors: string[] = [];
+
+  page.on('pageerror', (error) => {
+    runtimeErrors.push(`pageerror: ${error.message}`);
+  });
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      runtimeErrors.push(`console: ${message.text()}`);
+    }
+  });
+
+  await loadGame(page);
+  await page.keyboard.press('Space');
+  await expect
+    .poll(async () => {
+      const snapshot = await getRuntimeSnapshot(page);
+      return snapshot.status;
+    })
+    .toBe('playing');
+
+  await forceNearSurfaceThrustState(page);
+  await page.keyboard.down('ArrowUp');
+
+  try {
+    await expect
+      .poll(async () => {
+        await forceNearSurfaceThrustState(page);
+        const snapshot = await getRuntimeSnapshot(page);
+        return snapshot.status;
+      })
+      .toBe('playing');
+
+    const seenStatuses = new Set<string>();
+
+    for (let sampleIndex = 0; sampleIndex < 40; sampleIndex += 1) {
+      await forceNearSurfaceThrustState(page);
+
+      const sample = await page.evaluate(() => {
+        const runtime = (window as Window & {
+          __LANDER_TEST_API__?: {
+            getRuntime: () => {
+              game: { status: string; particles: unknown[] };
+            };
+          };
+        }).__LANDER_TEST_API__?.getRuntime();
+
+        return {
+          status: runtime?.game.status ?? 'unknown',
+        };
+      });
+
+      seenStatuses.add(sample.status);
+      expect(sample.status).toBe('playing');
+
+      await page.waitForTimeout(50);
+    }
+
+    expect(seenStatuses.size).toBe(1);
+    expect(seenStatuses.has('playing')).toBe(true);
+    expect(runtimeErrors).toEqual([]);
+
+    await page.evaluate(() => {
+      const runtime = (window as Window & {
+        __LANDER_TEST_API__?: {
+          getRuntime: () => {
+            game: {
+              status: string;
+              terrain: Array<{ x: number; y: number }>;
+              particles: unknown[];
+            };
+          };
+        };
+      }).__LANDER_TEST_API__?.getRuntime();
+
+      if (!runtime) {
+        return;
+      }
+
+      runtime.game.status = 'playing';
+      runtime.game.terrain = [
+        { x: -400, y: 300 },
+        { x: 1400, y: 300 },
+      ];
+      runtime.game.particles = [
+        {
+          x: 400,
+          y: 299,
+          vx: 0.1,
+          vy: 2,
+          kind: 'flame',
+          life: 1,
+          decay: 0.001,
+          size: 2,
+        },
+      ];
+    });
+
+    await expect
+      .poll(async () => {
+        const sample = await page.evaluate(() => {
+          const runtime = (window as Window & {
+            __LANDER_TEST_API__?: {
+              getRuntime: () => {
+                game: { status: string; particles: unknown[] };
+              };
+            };
+          }).__LANDER_TEST_API__?.getRuntime();
+
+          const particles = Array.isArray(runtime?.game.particles) ? runtime.game.particles : [];
+          let dustCount = 0;
+
+          for (const particle of particles) {
+            if (!particle || typeof particle !== 'object') {
+              continue;
+            }
+            if ((particle as { kind?: unknown }).kind === 'dust') {
+              dustCount += 1;
+            }
+          }
+
+          return {
+            status: runtime?.game.status ?? 'unknown',
+            dustCount,
+          };
+        });
+
+        expect(sample.status).toBe('playing');
+        return sample.dustCount;
+      })
+      .toBeGreaterThan(0);
+  } finally {
+    await page.keyboard.up('ArrowUp');
+  }
 });

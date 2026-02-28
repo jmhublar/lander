@@ -120,6 +120,8 @@ describe('fuel mechanic', () => {
     const lander = runtime.game.lander as Lander;
     expect(lander.thrusting).toBe(false);
     expect(runtime.game.particles).toHaveLength(0);
+    expect(runtime.game.particles.filter((particle) => particle.kind === 'flame')).toHaveLength(0);
+    expect(runtime.game.particles.filter((particle) => particle.kind === 'dust')).toHaveLength(0);
     expect(audio.updateThrustSound).toHaveBeenCalledWith(false);
   });
 
