@@ -35,6 +35,9 @@ export interface Particle {
   decay: number;
   size: number;
   color?: string;
+  kind?: 'flame' | 'dust';
+  drag?: number;
+  gravityScale?: number;
 }
 
 export interface Camera {

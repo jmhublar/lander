@@ -13,23 +13,74 @@ import {
   syncHighScore,
 } from './entities';
 
+export const EXHAUST_SAMPLE_DX = 6;
+export const EXHAUST_BOUNCE_DAMPING = 0.62;
+export const MAX_SUSTAINED_EXHAUST_PARTICLES = 320;
+export const MAX_EXHAUST_SPAWN_PER_FRAME = 8;
+
+function isSustainedExhaustParticleKind(kind: string | undefined): boolean {
+  return kind === 'flame' || kind === 'dust';
+}
+
+function countSustainedExhaustParticles(runtime: GameRuntime): number {
+  let sustainedCount = 0;
+  for (const particle of runtime.game.particles) {
+    if (isSustainedExhaustParticleKind(particle.kind)) {
+      sustainedCount += 1;
+    }
+  }
+
+  return sustainedCount;
+}
+
+export interface TerrainLocalFrame {
+  tangentX: number;
+  tangentY: number;
+  normalX: number;
+  normalY: number;
+}
+
+const DEFAULT_TERRAIN_FRAME: TerrainLocalFrame = {
+  tangentX: 1,
+  tangentY: 0,
+  normalX: 0,
+  normalY: -1,
+};
+
+const SILVER_DUST_COLORS = ['#c0c0c0', '#a8adb3', '#d4d7db'] as const;
+
 export function spawnThrustParticles(
   runtime: GameRuntime,
   x: number,
   y: number,
   angle: number,
 ): void {
-  for (let i = 0; i < 2; i += 1) {
+  const sustainedCount = countSustainedExhaustParticles(runtime);
+  const remainingCap = Math.max(0, MAX_SUSTAINED_EXHAUST_PARTICLES - sustainedCount);
+  let spawnBudget = Math.min(MAX_EXHAUST_SPAWN_PER_FRAME, remainingCap);
+  if (spawnBudget <= 0) {
+    return;
+  }
+
+  const flameCount = 2;
+
+  for (let i = 0; i < flameCount && spawnBudget > 0; i += 1) {
     const spread = (Math.random() - 0.5) * 0.5;
+    const speed = 2 + Math.random() * 2;
+    const vx = -Math.sin(angle + spread) * speed;
+    const vy = Math.cos(angle + spread) * speed;
+
     runtime.game.particles.push({
       x,
       y,
-      vx: -Math.sin(angle + spread) * (2 + Math.random() * 2),
-      vy: Math.cos(angle + spread) * (2 + Math.random() * 2),
+      vx,
+      vy,
+      kind: 'flame',
       life: 1,
       decay: 0.02 + Math.random() * 0.03,
       size: Math.random() * 3 + 1,
     });
+    spawnBudget -= 1;
   }
 }
 
@@ -104,6 +155,41 @@ export function getTerrainYAtX(runtime: GameRuntime, x: number): number {
   const linearY = last.y + edgeSlope * distance;
   const taper = (distance / taperScale) * (distance / taperScale) * (h * 0.35);
   return Math.min(maxY, linearY + taper);
+}
+
+export function getTerrainLocalFrameAtX(runtime: GameRuntime, x: number): TerrainLocalFrame {
+  const sampleDx = Number.isFinite(EXHAUST_SAMPLE_DX) && EXHAUST_SAMPLE_DX > 0 ? EXHAUST_SAMPLE_DX : 1;
+  const leftY = getTerrainYAtX(runtime, x - sampleDx);
+  const rightY = getTerrainYAtX(runtime, x + sampleDx);
+  if (!Number.isFinite(leftY) || !Number.isFinite(rightY)) {
+    return DEFAULT_TERRAIN_FRAME;
+  }
+
+  const rawTangentX = sampleDx * 2;
+  const rawTangentY = rightY - leftY;
+  const tangentLength = Math.hypot(rawTangentX, rawTangentY);
+  if (!Number.isFinite(tangentLength) || tangentLength <= 1e-9) {
+    return DEFAULT_TERRAIN_FRAME;
+  }
+
+  const tangentX = rawTangentX / tangentLength;
+  const tangentY = rawTangentY / tangentLength;
+  if (!Number.isFinite(tangentX) || !Number.isFinite(tangentY)) {
+    return DEFAULT_TERRAIN_FRAME;
+  }
+
+  let normalX = -tangentY;
+  let normalY = tangentX;
+  if (!Number.isFinite(normalX) || !Number.isFinite(normalY)) {
+    return DEFAULT_TERRAIN_FRAME;
+  }
+
+  if (normalY > 0) {
+    normalX = -normalX;
+    normalY = -normalY;
+  }
+
+  return { tangentX, tangentY, normalX, normalY };
 }
 
 interface Point {
@@ -335,9 +421,39 @@ function updateCamera(runtime: GameRuntime, frameScale: number): void {
 function updateParticles(runtime: GameRuntime, frameScale: number): void {
   for (let i = runtime.game.particles.length - 1; i >= 0; i -= 1) {
     const p = runtime.game.particles[i];
+    const gravityScale = Number.isFinite(p.gravityScale ?? Number.NaN) ? (p.gravityScale ?? 1) : 1;
+    const drag = Number.isFinite(p.drag ?? Number.NaN) ? Math.max(0, p.drag ?? 0) : 0;
     p.x += p.vx * frameScale;
     p.y += p.vy * frameScale;
-    p.vy += 0.01 * frameScale;
+    p.vy += 0.01 * gravityScale * frameScale;
+    if (drag > 0) {
+      const dragScale = Math.max(0, 1 - drag * frameScale);
+      p.vx *= dragScale;
+      p.vy *= dragScale;
+    }
+
+    const terrainY = getTerrainYAtX(runtime, p.x);
+    if (Number.isFinite(terrainY) && p.y >= terrainY) {
+      if (p.kind === 'flame') {
+        p.kind = 'dust';
+        p.color ??= SILVER_DUST_COLORS[0];
+        p.drag ??= 0.1;
+        p.gravityScale ??= 1.2;
+      }
+
+      if (p.kind === 'dust') {
+        const frame = getTerrainLocalFrameAtX(runtime, p.x);
+        const tangentComponent = p.vx * frame.tangentX + p.vy * frame.tangentY;
+        const normalComponent = p.vx * frame.normalX + p.vy * frame.normalY;
+        const bouncedNormal =
+          normalComponent < 0 ? -normalComponent * EXHAUST_BOUNCE_DAMPING : normalComponent;
+
+        p.vx = frame.tangentX * tangentComponent + frame.normalX * bouncedNormal;
+        p.vy = frame.tangentY * tangentComponent + frame.normalY * bouncedNormal;
+        p.y = terrainY;
+      }
+    }
+
     p.life -= p.decay * frameScale;
     if (p.life <= 0) {
       runtime.game.particles.splice(i, 1);
