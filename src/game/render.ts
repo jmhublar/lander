@@ -232,7 +232,27 @@ function drawLander(runtime: GameRuntime): void {
 function drawParticles(runtime: GameRuntime): void {
   const { ctx, game } = runtime;
   game.particles.forEach((p) => {
-    ctx.globalAlpha = p.life;
+    const life = Math.max(0, Math.min(1, p.life));
+
+    if (p.kind === 'dust') {
+      const dustColor = p.color ?? '#b8bec6';
+      const outerRadius = p.size * 1.8;
+      const innerRadius = p.size * 1.15;
+
+      ctx.fillStyle = dustColor;
+      ctx.globalAlpha = life * 0.24;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, outerRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.globalAlpha = life * 0.46;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, innerRadius, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+
+    ctx.globalAlpha = life;
     ctx.fillStyle = p.color ?? '#ff8800';
     ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
   });

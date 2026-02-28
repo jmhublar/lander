@@ -11,7 +11,14 @@ import {
   type Lander,
   type TerrainPoint,
 } from './entities';
-import { getTerrainYAtX, update } from './physics';
+import {
+  EXHAUST_SAMPLE_DX,
+  MAX_SUSTAINED_EXHAUST_PARTICLES,
+  getTerrainLocalFrameAtX,
+  getTerrainYAtX,
+  spawnThrustParticles,
+  update,
+} from './physics';
 import type { AudioSystem } from './audio';
 
 type AudioStub = Pick<
@@ -141,7 +148,321 @@ describe('getTerrainYAtX', () => {
   });
 });
 
+describe('getTerrainLocalFrameAtX', () => {
+  it('computes centered tangent and upward normal from sampled terrain heights', () => {
+    const runtime = createRuntime();
+    runtime.game.terrain = [
+      { x: 0, y: 100 },
+      { x: 100, y: 120 },
+      { x: 200, y: 140 },
+    ];
+
+    const frame = getTerrainLocalFrameAtX(runtime, 100);
+    const expectedSlope = (getTerrainYAtX(runtime, 100 + EXHAUST_SAMPLE_DX) - getTerrainYAtX(runtime, 100 - EXHAUST_SAMPLE_DX)) / (2 * EXHAUST_SAMPLE_DX);
+    const expectedTangentX = 1 / Math.hypot(1, expectedSlope);
+    const expectedTangentY = expectedSlope / Math.hypot(1, expectedSlope);
+    const tangentDotNormal = frame.tangentX * frame.normalX + frame.tangentY * frame.normalY;
+
+    expect(frame.tangentX).toBeCloseTo(expectedTangentX, 10);
+    expect(frame.tangentY).toBeCloseTo(expectedTangentY, 10);
+    expect(Math.hypot(frame.tangentX, frame.tangentY)).toBeCloseTo(1, 10);
+    expect(Math.hypot(frame.normalX, frame.normalY)).toBeCloseTo(1, 10);
+    expect(tangentDotNormal).toBeCloseTo(0, 10);
+    expect(frame.normalY).toBeLessThanOrEqual(0);
+  });
+
+  it('stays finite and stable across tapered edges with upward-oriented normal', () => {
+    const runtime = createRuntime();
+    runtime.game.terrain = [
+      { x: 20, y: 90 },
+      { x: 100, y: 90 },
+      { x: 180, y: 120 },
+      { x: 260, y: 120 },
+    ];
+
+    const leftEdgeFrame = getTerrainLocalFrameAtX(runtime, -300);
+    const rightEdgeFrame = getTerrainLocalFrameAtX(runtime, 700);
+
+    expect(Number.isFinite(leftEdgeFrame.tangentX)).toBe(true);
+    expect(Number.isFinite(leftEdgeFrame.tangentY)).toBe(true);
+    expect(Number.isFinite(leftEdgeFrame.normalX)).toBe(true);
+    expect(Number.isFinite(leftEdgeFrame.normalY)).toBe(true);
+    expect(leftEdgeFrame.normalY).toBeLessThanOrEqual(0);
+    expect(Math.hypot(leftEdgeFrame.tangentX, leftEdgeFrame.tangentY)).toBeCloseTo(1, 10);
+    expect(Math.hypot(leftEdgeFrame.normalX, leftEdgeFrame.normalY)).toBeCloseTo(1, 10);
+
+    expect(Number.isFinite(rightEdgeFrame.tangentX)).toBe(true);
+    expect(Number.isFinite(rightEdgeFrame.tangentY)).toBe(true);
+    expect(Number.isFinite(rightEdgeFrame.normalX)).toBe(true);
+    expect(Number.isFinite(rightEdgeFrame.normalY)).toBe(true);
+    expect(rightEdgeFrame.normalY).toBeLessThanOrEqual(0);
+    expect(Math.hypot(rightEdgeFrame.tangentX, rightEdgeFrame.tangentY)).toBeCloseTo(1, 10);
+    expect(Math.hypot(rightEdgeFrame.normalX, rightEdgeFrame.normalY)).toBeCloseTo(1, 10);
+  });
+
+  it('falls back to a stable default frame when terrain samples are non-finite', () => {
+    const runtime = createRuntime();
+    runtime.game.terrain = [{ x: 0, y: Number.NaN }];
+
+    expect(getTerrainLocalFrameAtX(runtime, 0)).toEqual({
+      tangentX: 1,
+      tangentY: 0,
+      normalX: 0,
+      normalY: -1,
+    });
+  });
+});
+
 describe('update fixed-step motion', () => {
+  it('keeps thrust plume emission invariant across altitude', () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    const nearRuntime = createRuntime({ x: 150, angle: 0, y: 20 });
+    nearRuntime.game.terrain = [
+      { x: 0, y: 120 },
+      { x: 300, y: 220 },
+    ];
+    const nearTerrainY = getTerrainYAtX(nearRuntime, 150);
+    nearRuntime.game.lander = {
+      ...(nearRuntime.game.lander as Lander),
+      x: 150,
+      angle: 0,
+      y: nearTerrainY - LANDER_SIZE - 24,
+      fuel: 100,
+    };
+    nearRuntime.input.keys.ArrowUp = true;
+
+    const farRuntime = createRuntime({ x: 150, angle: 0, y: 20 });
+    farRuntime.game.terrain = [...nearRuntime.game.terrain];
+    farRuntime.game.lander = {
+      ...(farRuntime.game.lander as Lander),
+      x: 150,
+      angle: 0,
+      y: nearTerrainY - LANDER_SIZE - 180,
+      fuel: 100,
+    };
+    farRuntime.input.keys.ArrowUp = true;
+
+    const nearAudio = createAudioStub();
+    const farAudio = createAudioStub();
+    update(nearRuntime, nearAudio as unknown as AudioSystem);
+    update(farRuntime, farAudio as unknown as AudioSystem);
+
+    const nearParticles = nearRuntime.game.particles.filter((particle) => particle.kind === 'flame');
+    const farParticles = farRuntime.game.particles.filter((particle) => particle.kind === 'flame');
+    const nearDust = nearRuntime.game.particles.filter((particle) => particle.kind === 'dust');
+    const farDust = farRuntime.game.particles.filter((particle) => particle.kind === 'dust');
+
+    expect(nearParticles).toHaveLength(2);
+    expect(farParticles).toHaveLength(2);
+    expect(nearDust).toHaveLength(0);
+    expect(farDust).toHaveLength(0);
+
+    for (let i = 0; i < nearParticles.length; i += 1) {
+      expect(nearParticles[i].vx).toBeCloseTo(farParticles[i].vx, 10);
+      expect(nearParticles[i].vy).toBeCloseTo(farParticles[i].vy, 10);
+    }
+
+    randomSpy.mockRestore();
+  });
+
+  it('creates ground effect through collision, not near-surface spawn branching', () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const terrain = [
+      { x: 0, y: 140 },
+      { x: 300, y: 180 },
+    ];
+
+    const runtime = createRuntime({ x: 150, angle: 0, y: 20, fuel: 100 });
+    runtime.game.terrain = terrain;
+    const terrainY = getTerrainYAtX(runtime, 150);
+    spawnThrustParticles(runtime, 150, terrainY, 0);
+
+    const audio = createAudioStub();
+    expect(runtime.game.particles).toHaveLength(2);
+    expect(runtime.game.particles.every((particle) => particle.kind === 'flame')).toBe(true);
+
+    runtime.game.status = 'gameOver';
+    update(runtime, audio as unknown as AudioSystem);
+
+    const dust = runtime.game.particles.filter((particle) => particle.kind === 'dust');
+    const flame = runtime.game.particles.filter((particle) => particle.kind === 'flame');
+
+    expect(runtime.game.particles).toHaveLength(2);
+    expect(flame).toHaveLength(0);
+    expect(dust).toHaveLength(2);
+    for (const particle of dust) {
+      expect(particle.y).toBeCloseTo(getTerrainYAtX(runtime, particle.x), 10);
+      expect(particle.vy).toBeLessThan(0);
+      expect(particle.drag).toBe(0.1);
+      expect(particle.gravityScale).toBe(1.2);
+      expect(particle.color).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+
+    randomSpy.mockRestore();
+  });
+
+  it('bounces dust off terrain while gravity continues to affect it', () => {
+    const runtime = createRuntime();
+    runtime.game.status = 'gameOver';
+    runtime.game.particles = [
+      {
+        x: 150,
+        y: 119,
+        vx: 1,
+        vy: 2,
+        life: 1,
+        decay: 0,
+        size: 1,
+        kind: 'dust',
+        gravityScale: 1,
+        drag: 0,
+      },
+    ];
+    const audio = createAudioStub();
+
+    update(runtime, audio as unknown as AudioSystem);
+
+    const dust = runtime.game.particles[0];
+    expect(dust.kind).toBe('dust');
+    expect(dust.y).toBe(120);
+    expect(dust.vx).toBeCloseTo(1, 10);
+    expect(dust.vy).toBeCloseTo(-(2 + 0.01) * 0.62, 10);
+
+    const postBounceVy = dust.vy;
+    update(runtime, audio as unknown as AudioSystem);
+
+    expect(runtime.game.particles).toHaveLength(1);
+    expect(dust.y).toBeLessThan(120);
+    expect(dust.vy).toBeCloseTo(postBounceVy + 0.01, 10);
+  });
+
+  it('converts flame particles to dust when they hit terrain', () => {
+    const runtime = createRuntime();
+    runtime.game.status = 'gameOver';
+    runtime.game.particles = [
+      {
+        x: 150,
+        y: 119,
+        vx: 0,
+        vy: 2,
+        life: 1,
+        decay: 0,
+        size: 1,
+        kind: 'flame',
+      },
+    ];
+    const audio = createAudioStub();
+
+    update(runtime, audio as unknown as AudioSystem);
+
+    const particle = runtime.game.particles[0];
+    expect(particle.kind).toBe('dust');
+    expect(particle.y).toBe(120);
+    expect(particle.vy).toBeLessThan(0);
+    expect(particle.drag).toBe(0.1);
+    expect(particle.gravityScale).toBe(1.2);
+    expect(particle.color).toMatch(/^#[0-9a-f]{6}$/i);
+  });
+
+  it('keeps lander motion and lifecycle unchanged when particles hit terrain', () => {
+    const runtimeWithParticles = createRuntime({ x: 150, y: 80, vx: 0.2, vy: -0.1, angle: 0.1 });
+    const controlRuntime = createRuntime({ x: 150, y: 80, vx: 0.2, vy: -0.1, angle: 0.1 });
+    runtimeWithParticles.game.particles = [
+      {
+        x: 140,
+        y: 119,
+        vx: 0.2,
+        vy: 2,
+        life: 1,
+        decay: 0,
+        size: 1,
+        kind: 'dust',
+        drag: 0,
+        gravityScale: 1,
+      },
+      {
+        x: 160,
+        y: 119,
+        vx: 0,
+        vy: 2,
+        life: 1,
+        decay: 0,
+        size: 1,
+        kind: 'flame',
+      },
+    ];
+    const audio = createAudioStub();
+
+    update(runtimeWithParticles, audio as unknown as AudioSystem);
+    update(controlRuntime, audio as unknown as AudioSystem);
+
+    const withParticlesLander = runtimeWithParticles.game.lander as Lander;
+    const controlLander = controlRuntime.game.lander as Lander;
+    expect(withParticlesLander.vx).toBeCloseTo(controlLander.vx, 10);
+    expect(withParticlesLander.vy).toBeCloseTo(controlLander.vy, 10);
+    expect(withParticlesLander.angle).toBeCloseTo(controlLander.angle, 10);
+    expect(withParticlesLander.x).toBeCloseTo(controlLander.x, 10);
+    expect(withParticlesLander.y).toBeCloseTo(controlLander.y, 10);
+    expect(runtimeWithParticles.game.status).toBe(controlRuntime.game.status);
+    expect(runtimeWithParticles.game.score).toBe(controlRuntime.game.score);
+    expect(runtimeWithParticles.game.lives).toBe(controlRuntime.game.lives);
+  });
+
+  it('enforces sustained exhaust particle cap', () => {
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const runtime = createRuntime({ x: 150, angle: 0, fuel: 100 });
+    const terrainY = getTerrainYAtX(runtime, 150);
+    runtime.game.lander = {
+      ...(runtime.game.lander as Lander),
+      x: 150,
+      angle: 0,
+      y: terrainY - LANDER_SIZE,
+      fuel: 100,
+    };
+    runtime.input.keys.ArrowUp = true;
+
+    runtime.game.particles = [
+      ...Array.from({ length: MAX_SUSTAINED_EXHAUST_PARTICLES - 1 }, () => ({
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        life: 1,
+        decay: 0,
+        size: 1,
+        kind: 'flame' as const,
+      })),
+      {
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        life: 1,
+        decay: 0,
+        size: 1,
+      },
+    ];
+
+    const sustainedCounts: number[] = [];
+    const audio = createAudioStub();
+    for (let i = 0; i < 180; i += 1) {
+      update(runtime, audio as unknown as AudioSystem);
+      sustainedCounts.push(
+        runtime.game.particles.filter((particle) => particle.kind === 'flame' || particle.kind === 'dust').length,
+      );
+    }
+
+    const maxSustainedCount = Math.max(...sustainedCounts);
+    const stabilizedWindow = sustainedCounts.slice(-60);
+    expect(sustainedCounts[0]).toBe(MAX_SUSTAINED_EXHAUST_PARTICLES);
+    expect(maxSustainedCount).toBeLessThanOrEqual(MAX_SUSTAINED_EXHAUST_PARTICLES);
+    expect(stabilizedWindow.every((count) => count >= MAX_SUSTAINED_EXHAUST_PARTICLES - 1)).toBe(true);
+    expect(stabilizedWindow.every((count) => count <= MAX_SUSTAINED_EXHAUST_PARTICLES)).toBe(true);
+
+    randomSpy.mockRestore();
+  });
+
   it.each([
     { thrustKey: false, expectedVy: GRAVITY, expectedParticles: 0 },
     { thrustKey: true, expectedVy: GRAVITY - THRUST, expectedParticles: 2 },
@@ -150,7 +471,7 @@ describe('update fixed-step motion', () => {
     expectedVy,
     expectedParticles,
   }) => {
-    const runtime = createRuntime({ y: 20 });
+    const runtime = createRuntime({ y: -40 });
     runtime.input.keys.ArrowUp = thrustKey;
     const audio = createAudioStub();
 
@@ -160,7 +481,7 @@ describe('update fixed-step motion', () => {
     const lander = runtime.game.lander as Lander;
     expect(lander.vx).toBeCloseTo(0, 10);
     expect(lander.vy).toBeCloseTo(expectedVy, 10);
-    expect(lander.y).toBeCloseTo(20 + expectedVy, 10);
+    expect(lander.y).toBeCloseTo(-40 + expectedVy, 10);
     expect(lander.thrusting).toBe(thrustKey);
     expect(runtime.game.particles).toHaveLength(expectedParticles);
     expect(audio.updateThrustSound).toHaveBeenCalledWith(thrustKey);
