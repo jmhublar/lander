@@ -128,7 +128,7 @@ function makeTestPlatformBase(): { base: Base; pad: LandingPad } {
       ],
     ],
   };
-  const pad: LandingPad = { x1: 140, x2: 180, y: deckY, cx: 160, multiplier: 3 };
+  const pad: LandingPad = { x1: 140, x2: 180, y: deckY, cx: 160, multiplier: 3, landingInset: 2 };
   return { base: { name: 'TEST', pads: [pad], structures: [structure] }, pad };
 }
 
@@ -195,7 +195,8 @@ describe('generateBases', () => {
     expect(platforms.length).toBeGreaterThan(0);
     platforms.forEach(({ pad, structure }) => {
       expect([3, 5]).toContain(pad.multiplier);
-      expect(pad.multiplier).toBe(pad.x2 - pad.x1 <= 30 ? 5 : 3);
+      expect(pad.multiplier).toBe(pad.x2 - pad.x1 <= 34 ? 5 : 3);
+      expect(pad.landingInset).toBe(2);
       expect(pad.y).toBe(structure.y - PLATFORM_HEIGHT);
       expect(pad.y).toBeLessThan(structure.y);
     });
@@ -283,6 +284,25 @@ describe('pad multiplier scoring', () => {
       Math.round((animation?.baseBonus ?? 0) * (animation?.velocityMultiplier ?? 0) * 3),
     );
     expect(audio.playLandingSound).toHaveBeenCalledTimes(1);
+  });
+
+  it('lands near the platform deck edge instead of crashing on the deck collider', () => {
+    const { base, pad } = makeTestPlatformBase();
+    const runtime = createRuntime({
+      x: pad.x1 + 3,
+      y: PLATFORM_DECK_Y - LANDER_SIZE + 0.1,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+    });
+    runtime.game.bases = [base];
+    runtime.game.landingPads = [pad];
+    const audio = createAudioStub();
+
+    update(runtime, audio as unknown as AudioSystem);
+
+    expect(runtime.game.status).toBe('landed');
+    expect(audio.playExplosionSound).not.toHaveBeenCalled();
   });
 
   it('defaults to multiplier x1 on pads without one', () => {

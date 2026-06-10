@@ -18,6 +18,7 @@ export interface LandingPad {
   y: number;
   cx: number;
   multiplier?: number;
+  landingInset?: number;
 }
 
 export type StructureKind = 'dome' | 'antenna' | 'tanks' | 'platform';
@@ -343,7 +344,8 @@ export const BASE_NAMES = [
 
 export const PLATFORM_DECK_THICKNESS = 5;
 export const PLATFORM_HEIGHT = 44;
-export const STRUCTURE_PAD_GAP = 12;
+export const STRUCTURE_PAD_GAP = 16;
+export const PLATFORM_LANDING_INSET = 2;
 
 function terrainYAt(points: TerrainPoint[], x: number): number {
   if (points.length === 0) {
@@ -451,8 +453,8 @@ function makePlatform(points: TerrainPoint[], cx: number, width: number): {
     ],
   };
 
-  const multiplier = width <= 30 ? 5 : 3;
-  const pad: LandingPad = { x1, x2, y: deckY, cx, multiplier };
+  const multiplier = width <= 34 ? 5 : 3;
+  const pad: LandingPad = { x1, x2, y: deckY, cx, multiplier, landingInset: PLATFORM_LANDING_INSET };
   return { structure, pad };
 }
 
@@ -493,12 +495,12 @@ export function generateBases(
 
     const hasPlatform = lvl >= 2 && rng() < 0.65;
     if (hasPlatform) {
-      const platformWidth = lvl >= 4 && rng() < 0.45 ? 26 : 38;
+      const platformWidth = lvl >= 4 && rng() < 0.45 ? 32 : 46;
       const platformSide = -structureSide;
       const platformCx =
         platformSide === 1
-          ? groundPad.x2 + STRUCTURE_PAD_GAP + 30 + platformWidth / 2
-          : groundPad.x1 - STRUCTURE_PAD_GAP - 30 - platformWidth / 2;
+          ? groundPad.x2 + STRUCTURE_PAD_GAP + 44 + platformWidth / 2
+          : groundPad.x1 - STRUCTURE_PAD_GAP - 44 - platformWidth / 2;
       const platform = makePlatform(points, platformCx, platformWidth);
       structures.push(platform.structure);
       pads.push(platform.pad);

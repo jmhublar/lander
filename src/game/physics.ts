@@ -308,13 +308,15 @@ function footprintIntersectsStructures(runtime: GameRuntime, lander: Lander): bo
 export function findPadContact(runtime: GameRuntime, lander: Lander): LandingPad | null {
   const footY = lander.y + LANDER_SIZE;
   return (
-    runtime.game.landingPads.find(
-      (p) =>
-        lander.x >= p.x1 + 5 &&
-        lander.x <= p.x2 - 5 &&
+    runtime.game.landingPads.find((p) => {
+      const inset = p.landingInset ?? 5;
+      return (
+        lander.x >= p.x1 + inset &&
+        lander.x <= p.x2 - inset &&
         footY >= p.y &&
-        footY - p.y < 8,
-    ) ?? null
+        footY - p.y < 8
+      );
+    }) ?? null
   );
 }
 
