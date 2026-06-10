@@ -3,9 +3,11 @@ import {
   MAX_SAFE_ANGLE,
   MAX_SAFE_VX,
   MAX_SAFE_VY,
+  PLATFORM_DECK_THICKNESS,
   mulberry32,
   type GameRuntime,
   type LandingScoreAnimation,
+  type Structure,
 } from './entities';
 import { getTerrainYAtX } from './physics';
 
@@ -170,6 +172,132 @@ function drawLandingPads(runtime: GameRuntime): void {
       ctx.fillStyle = '#ff4444';
       ctx.fillRect(pad.x1, pad.y - 5, 3, 5);
       ctx.fillRect(pad.x2 - 3, pad.y - 5, 3, 5);
+    }
+    const multiplier = pad.multiplier ?? 1;
+    if (multiplier > 1) {
+      ctx.fillStyle = '#ffcc00';
+      ctx.font = 'bold 11px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`x${multiplier}`, pad.cx, pad.y - 10);
+    }
+  });
+}
+
+function drawDome(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
+  const half = width / 2;
+  ctx.beginPath();
+  ctx.moveTo(x - half, y);
+  ctx.ellipse(x, y, half, height, 0, Math.PI, Math.PI * 2);
+  ctx.closePath();
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fill();
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.strokeStyle = '#444';
+  ctx.lineWidth = 1;
+  for (const t of [-0.5, 0, 0.5]) {
+    ctx.beginPath();
+    ctx.moveTo(x + t * half, y);
+    ctx.quadraticCurveTo(x + t * half * 0.6, y - height, x, y - height);
+    ctx.stroke();
+  }
+
+  const windowBlink = Math.sin(Date.now() / 800) > -0.5;
+  ctx.fillStyle = windowBlink ? '#44ff88' : '#1f5533';
+  ctx.fillRect(x - 2, y - height * 0.45, 4, 3);
+}
+
+function drawAntenna(ctx: CanvasRenderingContext2D, x: number, y: number, height: number): void {
+  ctx.strokeStyle = '#aaa';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x, y - height);
+  ctx.stroke();
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#888';
+  for (const [dy, half] of [
+    [height * 0.35, 7],
+    [height * 0.6, 5],
+  ]) {
+    ctx.beginPath();
+    ctx.moveTo(x - half, y - dy);
+    ctx.lineTo(x + half, y - dy);
+    ctx.stroke();
+  }
+
+  const blink = Math.sin(Date.now() / 500) > 0;
+  if (blink) {
+    ctx.fillStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.arc(x, y - height, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawTanks(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
+  const tankWidth = width / 2 - 2;
+  for (const side of [-1, 1]) {
+    const cx = x + (side * (tankWidth + 4)) / 2;
+    const left = cx - tankWidth / 2;
+    ctx.fillStyle = '#222';
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(left, y - height + 4);
+    ctx.arc(cx, y - height + 4, tankWidth / 2, Math.PI, 0);
+    ctx.lineTo(left + tankWidth, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+}
+
+function drawPlatform(ctx: CanvasRenderingContext2D, structure: Structure): void {
+  const deckY = structure.y - structure.height;
+  const x1 = structure.x - structure.width / 2;
+
+  ctx.strokeStyle = '#aaa';
+  ctx.lineWidth = 1.5;
+  for (const leg of structure.colliders.slice(1)) {
+    ctx.beginPath();
+    ctx.moveTo(leg[0].x, leg[0].y);
+    ctx.lineTo(leg[leg.length - 1].x, leg[leg.length - 1].y);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = '#333';
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 1;
+  ctx.fillRect(x1, deckY, structure.width, PLATFORM_DECK_THICKNESS);
+  ctx.strokeRect(x1, deckY, structure.width, PLATFORM_DECK_THICKNESS);
+}
+
+function drawBases(runtime: GameRuntime): void {
+  const { ctx, game } = runtime;
+  game.bases.forEach((base) => {
+    base.structures.forEach((structure) => {
+      if (structure.kind === 'dome') {
+        drawDome(ctx, structure.x, structure.y, structure.width, structure.height);
+      } else if (structure.kind === 'antenna') {
+        drawAntenna(ctx, structure.x, structure.y, structure.height);
+      } else if (structure.kind === 'tanks') {
+        drawTanks(ctx, structure.x, structure.y, structure.width, structure.height);
+      } else if (structure.kind === 'platform') {
+        drawPlatform(ctx, structure);
+      }
+    });
+
+    const apron = base.pads[0];
+    if (apron) {
+      ctx.fillStyle = '#557766';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(base.name, apron.cx, apron.y + 16);
     }
   });
 }
@@ -372,7 +500,9 @@ function drawMessage(runtime: GameRuntime, text: string, color: string, sub: str
         0,
         9.99,
       );
-      const computedFinalAward = Math.round(baseBonus * velocityMultiplier);
+      const computedFinalAward = Math.round(
+        baseBonus * velocityMultiplier * Math.max(1, toFiniteNumber(landingScoreAnimation.padMultiplier, 1)),
+      );
       const finalAward = Math.max(
         0,
         Math.round(toFiniteNumber(landingScoreAnimation.finalAward, computedFinalAward)),
@@ -388,13 +518,22 @@ function drawMessage(runtime: GameRuntime, text: string, color: string, sub: str
       const awardProgress = finalAward > 0 ? displayedAward / finalAward : timelineProgress;
       const progress = clampNumber(awardProgress, 0, 1);
 
+      const padMultiplier = Math.max(1, toFiniteNumber(landingScoreAnimation.padMultiplier, 1));
+
       const detailTop = cy + 2;
       const detailGap = 17;
       ctx.font = '15px monospace';
       ctx.fillText(`Base bonus: ${baseBonus}`, cx, detailTop);
       ctx.fillText(`Velocity multiplier: x${velocityMultiplier.toFixed(2)}`, cx, detailTop + detailGap);
+      let detailRows = 2;
+      if (padMultiplier > 1) {
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillText(`Pad multiplier: x${padMultiplier}`, cx, detailTop + detailGap * 2);
+        ctx.fillStyle = '#888';
+        detailRows = 3;
+      }
 
-      const awardY = detailTop + detailGap * 2 + 5;
+      const awardY = detailTop + detailGap * detailRows + 5;
       ctx.fillStyle = '#e6e6e6';
       ctx.font = 'bold 20px monospace';
       ctx.fillText(`Award +${displayedAward}`, cx, awardY);
@@ -535,6 +674,7 @@ export function render(runtime: GameRuntime): void {
     ctx.scale(game.camera.zoom, game.camera.zoom);
     ctx.translate(-cx - game.camera.x, -cy - game.camera.y);
     drawTerrain(runtime);
+    drawBases(runtime);
     drawLandingPads(runtime);
     drawParticles(runtime);
     ctx.restore();
@@ -564,6 +704,7 @@ export function render(runtime: GameRuntime): void {
   ctx.translate(-cx - game.camera.x, -cy - game.camera.y);
 
   drawTerrain(runtime);
+  drawBases(runtime);
   drawLandingPads(runtime);
   drawParticles(runtime);
   if (game.status !== 'crashed') {

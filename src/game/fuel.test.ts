@@ -78,6 +78,7 @@ function createRuntime(landerOverrides: Partial<Lander> = {}): GameRuntime {
         { x: 300, y: 120 },
       ],
       landingPads: [{ x1: 100, x2: 200, y: 120, cx: 150 }],
+      bases: [],
       stars: [],
       particles: [],
       camera: { x: 0, y: 0, zoom: 1, targetZoom: 1 },

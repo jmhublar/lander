@@ -17,6 +17,26 @@ export interface LandingPad {
   x2: number;
   y: number;
   cx: number;
+  multiplier?: number;
+  landingInset?: number;
+  elevated?: boolean;
+}
+
+export type StructureKind = 'dome' | 'antenna' | 'tanks' | 'platform';
+
+export interface Structure {
+  kind: StructureKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  colliders: TerrainPoint[][];
+}
+
+export interface Base {
+  name: string;
+  pads: LandingPad[];
+  structures: Structure[];
 }
 
 export interface Star {
@@ -98,6 +118,7 @@ export interface LeaderboardState {
 export interface LandingScoreAnimation {
   baseBonus: number;
   velocityMultiplier: number;
+  padMultiplier?: number;
   finalAward: number;
   displayedAward: number;
   elapsedMs: number;
@@ -114,6 +135,7 @@ export interface GameState {
   lander: Lander | null;
   terrain: TerrainPoint[];
   landingPads: LandingPad[];
+  bases: Base[];
   stars: Star[];
   particles: Particle[];
   attemptPeakSpeed?: number;
@@ -193,6 +215,7 @@ export function createRuntime(
       lander: null,
       terrain: [],
       landingPads: [],
+      bases: [],
       stars: [],
       particles: [],
       attemptPeakSpeed: 0,
@@ -307,6 +330,193 @@ export function generateTerrain(
   }));
 
   return { points, landingPads };
+}
+
+export const BASE_NAMES = [
+  'TYCHO',
+  'CRISIUM',
+  'SERENITY',
+  'COPERNICUS',
+  'KEPLER',
+  'ARISTARCHUS',
+  'PLATO',
+  'IMBRIUM',
+] as const;
+
+export const PLATFORM_DECK_THICKNESS = 5;
+export const PLATFORM_HEIGHT = 44;
+export const STRUCTURE_PAD_GAP = 16;
+export const PLATFORM_LANDING_INSET = 2;
+
+function terrainYAt(points: TerrainPoint[], x: number): number {
+  if (points.length === 0) {
+    return 0;
+  }
+  if (x <= points[0].x) {
+    return points[0].y;
+  }
+  for (let i = 0; i < points.length - 1; i += 1) {
+    if (x >= points[i].x && x <= points[i + 1].x) {
+      const t = (x - points[i].x) / Math.max(1e-9, points[i + 1].x - points[i].x);
+      return points[i].y + t * (points[i + 1].y - points[i].y);
+    }
+  }
+  return points[points.length - 1].y;
+}
+
+function makeDome(x: number, y: number): Structure {
+  const width = 44;
+  const height = 26;
+  const half = width / 2;
+  const arc: TerrainPoint[] = [];
+  const arcSegments = 6;
+  for (let i = 0; i <= arcSegments; i += 1) {
+    const t = Math.PI - (i / arcSegments) * Math.PI;
+    arc.push({ x: x + Math.cos(t) * half, y: y - Math.sin(t) * height });
+  }
+  return { kind: 'dome', x, y, width, height, colliders: [arc] };
+}
+
+function makeAntenna(x: number, y: number): Structure {
+  const height = 44;
+  return {
+    kind: 'antenna',
+    x,
+    y,
+    width: 2,
+    height,
+    colliders: [
+      [
+        { x, y: y - height },
+        { x, y },
+      ],
+    ],
+  };
+}
+
+function makeTanks(x: number, y: number): Structure {
+  const width = 30;
+  const height = 16;
+  const half = width / 2;
+  return {
+    kind: 'tanks',
+    x,
+    y,
+    width,
+    height,
+    colliders: [
+      [
+        { x: x - half, y },
+        { x: x - half, y: y - height },
+        { x: x + half, y: y - height },
+        { x: x + half, y },
+      ],
+    ],
+  };
+}
+
+function makePlatform(points: TerrainPoint[], cx: number, width: number): {
+  structure: Structure;
+  pad: LandingPad;
+} {
+  const x1 = cx - width / 2;
+  const x2 = cx + width / 2;
+  const legLeftX = x1 + 3;
+  const legRightX = x2 - 3;
+  const legLeftGroundY = terrainYAt(points, legLeftX);
+  const legRightGroundY = terrainYAt(points, legRightX);
+  const anchorGroundY = Math.min(legLeftGroundY, legRightGroundY);
+  const deckY = anchorGroundY - PLATFORM_HEIGHT;
+  const deckBottomY = deckY + PLATFORM_DECK_THICKNESS;
+
+  const structure: Structure = {
+    kind: 'platform',
+    x: cx,
+    y: anchorGroundY,
+    width,
+    height: PLATFORM_HEIGHT,
+    colliders: [
+      [
+        { x: x1, y: deckY },
+        { x: x2, y: deckY },
+        { x: x2, y: deckBottomY },
+        { x: x1, y: deckBottomY },
+        { x: x1, y: deckY },
+      ],
+      [
+        { x: legLeftX, y: deckBottomY },
+        { x: legLeftX, y: legLeftGroundY },
+      ],
+      [
+        { x: legRightX, y: deckBottomY },
+        { x: legRightX, y: legRightGroundY },
+      ],
+    ],
+  };
+
+  const multiplier = width <= 34 ? 5 : 3;
+  const pad: LandingPad = {
+    x1,
+    x2,
+    y: deckY,
+    cx,
+    multiplier,
+    landingInset: PLATFORM_LANDING_INSET,
+    elevated: true,
+  };
+  return { structure, pad };
+}
+
+export function generateBases(
+  lvl: number,
+  points: TerrainPoint[],
+  groundPads: LandingPad[],
+): Base[] {
+  const rng = mulberry32(lvl * 7919 + 4242);
+
+  return groundPads.map((groundPad, padIndex) => {
+    groundPad.multiplier = 1;
+    const name = BASE_NAMES[(lvl + padIndex * 3) % BASE_NAMES.length];
+    const structures: Structure[] = [];
+    const pads: LandingPad[] = [groundPad];
+
+    const structureSide = rng() < 0.5 ? -1 : 1;
+    const clusterStartX =
+      structureSide === 1
+        ? groundPad.x2 + STRUCTURE_PAD_GAP
+        : groundPad.x1 - STRUCTURE_PAD_GAP;
+
+    let cursorX = clusterStartX;
+    const placeStructure = (
+      make: (x: number, y: number) => Structure,
+      width: number,
+    ): void => {
+      const centerX = cursorX + structureSide * (width / 2);
+      structures.push(make(centerX, terrainYAt(points, centerX)));
+      cursorX += structureSide * (width + 8 + rng() * 8);
+    };
+
+    placeStructure(makeDome, 44);
+    placeStructure(makeAntenna, 2);
+    if (rng() < 0.7) {
+      placeStructure(makeTanks, 30);
+    }
+
+    const hasPlatform = lvl >= 2 && rng() < 0.65;
+    if (hasPlatform) {
+      const platformWidth = lvl >= 4 && rng() < 0.45 ? 32 : 46;
+      const platformSide = -structureSide;
+      const platformCx =
+        platformSide === 1
+          ? groundPad.x2 + STRUCTURE_PAD_GAP + 44 + platformWidth / 2
+          : groundPad.x1 - STRUCTURE_PAD_GAP - 44 - platformWidth / 2;
+      const platform = makePlatform(points, platformCx, platformWidth);
+      structures.push(platform.structure);
+      pads.push(platform.pad);
+    }
+
+    return { name, pads, structures };
+  });
 }
 
 export function generateStars(canvas: HTMLCanvasElement): Star[] {

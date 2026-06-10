@@ -59,6 +59,7 @@ async function forceSafeLandingState(page: Page): Promise<void> {
             score: number;
             terrain: Array<{ x: number; y: number }>;
             landingPads: Array<{ x1: number; x2: number; y: number; cx: number }>;
+            bases: unknown[];
             particles: unknown[];
             lander: {
               x: number;
@@ -89,6 +90,7 @@ async function forceSafeLandingState(page: Page): Promise<void> {
       { x: 1400, y: 300 },
     ];
     runtime.game.landingPads = [{ x1: 350, x2: 450, y: 300, cx: 400 }];
+    runtime.game.bases = [];
     runtime.game.lander = {
       x: 400,
       y: 286,
@@ -112,6 +114,7 @@ async function forceCrashTransition(page: Page): Promise<void> {
             status: string;
             terrain: Array<{ x: number; y: number }>;
             landingPads: Array<{ x1: number; x2: number; y: number; cx: number }>;
+            bases: unknown[];
             particles: unknown[];
             lander: {
               x: number;
@@ -139,6 +142,7 @@ async function forceCrashTransition(page: Page): Promise<void> {
       { x: 1400, y: 300 },
     ];
     runtime.game.landingPads = [{ x1: 350, x2: 450, y: 300, cx: 400 }];
+    runtime.game.bases = [];
     runtime.game.particles = [];
     runtime.game.lander = {
       x: 2000,
@@ -163,6 +167,7 @@ async function forceNearSurfaceThrustState(page: Page): Promise<void> {
             status: string;
             terrain: Array<{ x: number; y: number }>;
             landingPads: Array<{ x1: number; x2: number; y: number; cx: number }>;
+            bases: unknown[];
             particles: unknown[];
             lander: {
               x: number;
@@ -190,6 +195,7 @@ async function forceNearSurfaceThrustState(page: Page): Promise<void> {
       { x: 1400, y: 300 },
     ];
     runtime.game.landingPads = [{ x1: 350, x2: 450, y: 300, cx: 400 }];
+    runtime.game.bases = [];
     runtime.game.particles = [];
     runtime.game.lander = {
       x: 400,
