@@ -128,7 +128,15 @@ function makeTestPlatformBase(): { base: Base; pad: LandingPad } {
       ],
     ],
   };
-  const pad: LandingPad = { x1: 140, x2: 180, y: deckY, cx: 160, multiplier: 3, landingInset: 2 };
+  const pad: LandingPad = {
+    x1: 140,
+    x2: 180,
+    y: deckY,
+    cx: 160,
+    multiplier: 3,
+    landingInset: 2,
+    elevated: true,
+  };
   return { base: { name: 'TEST', pads: [pad], structures: [structure] }, pad };
 }
 
@@ -238,13 +246,13 @@ describe('base structure collisions', () => {
     expect(audio.playLandingSound).not.toHaveBeenCalled();
   });
 
-  it('crashes when ascending into the platform deck from below', () => {
+  it('crashes when rising fast into the platform deck from below', () => {
     const { base, pad } = makeTestPlatformBase();
     const runtime = createRuntime({
       x: 160,
       y: PLATFORM_DECK_Y + 4 - LANDER_SIZE,
       vx: 0,
-      vy: -1,
+      vy: -1.5,
       angle: 0,
     });
     runtime.game.bases = [base];
@@ -297,6 +305,54 @@ describe('pad multiplier scoring', () => {
     });
     runtime.game.bases = [base];
     runtime.game.landingPads = [pad];
+    const audio = createAudioStub();
+
+    update(runtime, audio as unknown as AudioSystem);
+
+    expect(runtime.game.status).toBe('landed');
+    expect(audio.playExplosionSound).not.toHaveBeenCalled();
+  });
+
+  it('lands when contacting a ground pad while rising slightly (original leniency)', () => {
+    const runtime = createRuntime({
+      x: 110,
+      y: 124 - LANDER_SIZE,
+      vx: 0,
+      vy: -0.05,
+      angle: 0,
+    });
+    runtime.game.terrain = [
+      { x: 0, y: 140 },
+      { x: 99, y: 140 },
+      { x: 100, y: 120 },
+      { x: 200, y: 120 },
+      { x: 201, y: 140 },
+      { x: 300, y: 140 },
+    ];
+    runtime.game.landingPads = [{ x1: 100, x2: 200, y: 120, cx: 150 }];
+    const audio = createAudioStub();
+
+    update(runtime, audio as unknown as AudioSystem);
+
+    expect(runtime.game.status).toBe('landed');
+    expect(audio.playExplosionSound).not.toHaveBeenCalled();
+  });
+
+  it('lands when a foot grazes contact with the foot center slightly above the pad surface', () => {
+    const runtime = createRuntime({
+      x: 192,
+      y: 117 - LANDER_SIZE,
+      vx: 0,
+      vy: 0.1,
+      angle: -0.3,
+    });
+    runtime.game.terrain = [
+      { x: 0, y: 120 },
+      { x: 200, y: 120 },
+      { x: 205, y: 108 },
+      { x: 300, y: 108 },
+    ];
+    runtime.game.landingPads = [{ x1: 100, x2: 200, y: 120, cx: 150 }];
     const audio = createAudioStub();
 
     update(runtime, audio as unknown as AudioSystem);

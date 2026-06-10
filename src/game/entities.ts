@@ -19,6 +19,7 @@ export interface LandingPad {
   cx: number;
   multiplier?: number;
   landingInset?: number;
+  elevated?: boolean;
 }
 
 export type StructureKind = 'dome' | 'antenna' | 'tanks' | 'platform';
@@ -454,7 +455,15 @@ function makePlatform(points: TerrainPoint[], cx: number, width: number): {
   };
 
   const multiplier = width <= 34 ? 5 : 3;
-  const pad: LandingPad = { x1, x2, y: deckY, cx, multiplier, landingInset: PLATFORM_LANDING_INSET };
+  const pad: LandingPad = {
+    x1,
+    x2,
+    y: deckY,
+    cx,
+    multiplier,
+    landingInset: PLATFORM_LANDING_INSET,
+    elevated: true,
+  };
   return { structure, pad };
 }
 

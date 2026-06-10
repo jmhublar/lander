@@ -313,10 +313,24 @@ export function findPadContact(runtime: GameRuntime, lander: Lander): LandingPad
       return (
         lander.x >= p.x1 + inset &&
         lander.x <= p.x2 - inset &&
-        footY >= p.y &&
-        footY - p.y < 8
+        Math.abs(footY - p.y) < 8
       );
     }) ?? null
+  );
+}
+
+function touchesElevatedPad(runtime: GameRuntime, lander: Lander): boolean {
+  const footY = lander.y + LANDER_SIZE;
+  const [leftFoot, rightFoot] = getLanderFootprint(lander);
+  const minFootX = Math.min(leftFoot.x, rightFoot.x);
+  const maxFootX = Math.max(leftFoot.x, rightFoot.x);
+  return runtime.game.landingPads.some(
+    (p) =>
+      p.elevated === true &&
+      maxFootX >= p.x1 &&
+      minFootX <= p.x2 &&
+      footY >= p.y &&
+      footY - p.y < 8,
   );
 }
 
@@ -353,15 +367,14 @@ function checkLanding(runtime: GameRuntime, audio: AudioSystem): void {
   const footY = lander.y + LANDER_SIZE;
   const terrainY = getTerrainYAtX(runtime, lander.x);
 
-  const pad = findPadContact(runtime, lander);
-  if (
-    pad ||
-    footprintIntersectsStructures(runtime, lander) ||
+  const contact =
     footY >= terrainY ||
-    footprintIntersectsTerrain(runtime, lander)
-  ) {
+    footprintIntersectsTerrain(runtime, lander) ||
+    footprintIntersectsStructures(runtime, lander) ||
+    touchesElevatedPad(runtime, lander);
+  if (contact) {
+    const pad = findPadContact(runtime, lander);
     const safeLanding =
-      lander.vy >= 0 &&
       Math.abs(lander.vy) <= MAX_SAFE_VY &&
       Math.abs(lander.vx) <= MAX_SAFE_VX &&
       Math.abs(lander.angle) <= MAX_SAFE_ANGLE;
