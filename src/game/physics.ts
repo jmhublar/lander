@@ -10,6 +10,7 @@ import {
   THRUST,
   type GameRuntime,
   type Lander,
+  type LandingPad,
   syncHighScore,
 } from './entities';
 
@@ -282,6 +283,41 @@ function segmentsIntersect(a: Point, b: Point, c: Point, d: Point): boolean {
   return orient1 * orient2 < 0 && orient3 * orient4 < 0;
 }
 
+function footprintIntersectsStructures(runtime: GameRuntime, lander: Lander): boolean {
+  const bases = runtime.game.bases ?? [];
+  if (bases.length === 0) {
+    return false;
+  }
+  const [leftFoot, rightFoot] = getLanderFootprint(lander);
+
+  for (const base of bases) {
+    for (const structure of base.structures) {
+      for (const collider of structure.colliders) {
+        for (let i = 0; i < collider.length - 1; i += 1) {
+          if (segmentsIntersect(leftFoot, rightFoot, collider[i], collider[i + 1])) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+export function findPadContact(runtime: GameRuntime, lander: Lander): LandingPad | null {
+  const footY = lander.y + LANDER_SIZE;
+  return (
+    runtime.game.landingPads.find(
+      (p) =>
+        lander.x >= p.x1 + 5 &&
+        lander.x <= p.x2 - 5 &&
+        footY >= p.y &&
+        footY - p.y < 8,
+    ) ?? null
+  );
+}
+
 function footprintIntersectsTerrain(runtime: GameRuntime, lander: Lander): boolean {
   const [leftFoot, rightFoot] = getLanderFootprint(lander);
   const minFootX = Math.min(leftFoot.x, rightFoot.x);
@@ -315,14 +351,15 @@ function checkLanding(runtime: GameRuntime, audio: AudioSystem): void {
   const footY = lander.y + LANDER_SIZE;
   const terrainY = getTerrainYAtX(runtime, lander.x);
 
-  if (footY >= terrainY || footprintIntersectsTerrain(runtime, lander)) {
-    const pad = runtime.game.landingPads.find(
-      (p) =>
-        lander.x >= p.x1 + 5 &&
-        lander.x <= p.x2 - 5 &&
-        Math.abs(footY - p.y) < 8,
-    );
+  const pad = findPadContact(runtime, lander);
+  if (
+    pad ||
+    footprintIntersectsStructures(runtime, lander) ||
+    footY >= terrainY ||
+    footprintIntersectsTerrain(runtime, lander)
+  ) {
     const safeLanding =
+      lander.vy >= 0 &&
       Math.abs(lander.vy) <= MAX_SAFE_VY &&
       Math.abs(lander.vx) <= MAX_SAFE_VX &&
       Math.abs(lander.angle) <= MAX_SAFE_ANGLE;
@@ -338,10 +375,12 @@ function checkLanding(runtime: GameRuntime, audio: AudioSystem): void {
       const multiple = MAX_SAFE_VY > 0 ? trackedPeakAbsVy / MAX_SAFE_VY : 0;
       const bucket = Math.floor(multiple * 2) / 2;
       const velocityMultiplier = Math.max(1, Number.isFinite(bucket) ? bucket : 1);
-      const finalAward = Math.round(baseBonus * velocityMultiplier);
+      const padMultiplier = Math.max(1, pad.multiplier ?? 1);
+      const finalAward = Math.round(baseBonus * velocityMultiplier * padMultiplier);
       runtime.game.landingScoreAnimation = {
         baseBonus,
         velocityMultiplier,
+        padMultiplier,
         finalAward,
         displayedAward: 0,
         elapsedMs: 0,

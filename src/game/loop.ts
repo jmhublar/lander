@@ -3,6 +3,7 @@ import {
   STARTING_FUEL,
   STARTING_LIVES,
   createRuntime,
+  generateBases,
   generateStars,
   generateTerrain,
   syncHighScore,
@@ -105,7 +106,8 @@ function startLevel(runtime: GameRuntime, audio: AudioSystem, lvl: number): void
   runtime.game.status = 'playing';
   const terrainData = generateTerrain(runtime.canvas, lvl);
   runtime.game.terrain = terrainData.points;
-  runtime.game.landingPads = terrainData.landingPads;
+  runtime.game.bases = generateBases(lvl, terrainData.points, terrainData.landingPads);
+  runtime.game.landingPads = runtime.game.bases.flatMap((base) => base.pads);
   runtime.game.stars = generateStars(runtime.canvas);
   runtime.game.particles = [];
   resetAttemptScopedState(runtime);
